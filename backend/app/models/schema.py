@@ -13,6 +13,7 @@ Data flow:
 """
 
 from __future__ import annotations
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from datetime import datetime
@@ -21,6 +22,11 @@ import uuid
 
 def _id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def new_id() -> str:
+    """Public alias for _id; used by parsers and services."""
+    return _id()
 
 
 # ═══════════════════════════════════════════════
@@ -44,6 +50,29 @@ class SourcePin(BaseModel):
     excerpt: Optional[str] = None             # short verbatim snippet
 
 
+class SourceLocation(BaseModel):
+    """
+    Parser-friendly location within evidence (page or time range).
+    Convert to SourcePin for Citation via to_source_pin().
+    """
+    evidence_id: str
+    page: Optional[int] = None
+    timestamp_start: Optional[float] = None
+    timestamp_end: Optional[float] = None
+    excerpt: Optional[str] = None
+
+    def to_source_pin(self) -> SourcePin:
+        if self.page is not None:
+            detail = f"Page {self.page}"
+        elif self.timestamp_start is not None and self.timestamp_end is not None:
+            detail = f"{self.timestamp_start:.1f}-{self.timestamp_end:.1f}s"
+        elif self.timestamp_start is not None:
+            detail = f"{self.timestamp_start:.1f}s"
+        else:
+            detail = "Source"
+        return SourcePin(evidence_id=self.evidence_id, detail=detail, excerpt=self.excerpt)
+
+
 # ═══════════════════════════════════════════════
 #  STAGE 1 — EVIDENCE IN (Your domain)
 # ═══════════════════════════════════════════════
@@ -56,8 +85,22 @@ EVIDENCE_TYPES = Literal[
     "dashcam_video",
     "surveillance_video",
     "insurance_document",
+    "diagram",
     "other",
 ]
+
+
+class EvidenceType(str, Enum):
+    """Enum alias for EVIDENCE_TYPES; use .value for schema fields."""
+    POLICE_REPORT = "police_report"
+    MEDICAL_RECORD = "medical_record"
+    WITNESS_STATEMENT = "witness_statement"
+    PHOTO = "photo"
+    DASHCAM_VIDEO = "dashcam_video"
+    SURVEILLANCE_VIDEO = "surveillance_video"
+    INSURANCE_DOCUMENT = "insurance_document"
+    DIAGRAM = "diagram"
+    OTHER = "other"
 
 
 class SpeakerSegment(BaseModel):
@@ -97,6 +140,7 @@ class Entity(BaseModel):
     type: Literal["person", "vehicle", "location", "date", "injury", "organization"]
     name: str                                 # "Witness 1 — Jane Doe", "Red 2019 Honda Civic"
     aliases: list[str] = []                   # other references to the same entity
+    mentions: list[SourceLocation] = []        # where this entity appears in evidence
 
 
 class EvidenceItem(BaseModel):
@@ -124,6 +168,13 @@ class Citation(BaseModel):
     id: str = Field(default_factory=_id)
     source: SourcePin
     label: str                                # short display text: "Police Report, p.2"
+
+
+class ContradictionSeverity(str, Enum):
+    """Enum alias for contradiction severity."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class Contradiction(BaseModel):
@@ -159,6 +210,8 @@ BLOCK_TYPES = Literal[
     "diagram",
     "counter_argument",
 ]
+
+SectionType = BLOCK_TYPES  # alias for code that imports SectionType
 
 
 class TimelineEvent(BaseModel):

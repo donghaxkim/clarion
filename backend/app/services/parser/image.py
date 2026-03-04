@@ -112,7 +112,7 @@ def parse_image(
     # Build content
     content = ExtractedContent(
         text=analysis.get("description", ""),
-        image_descriptions=[analysis.get("description", "")],
+        image_description=analysis.get("description", ""),
     )
 
     evidence = EvidenceItem(
