@@ -190,13 +190,12 @@ def build_contradiction(raw: dict) -> Contradiction:
     )
 
     return Contradiction(
-        severity=severity,
+        severity=getattr(severity, "value", severity),
         description=description,
-        source_a=fact_a.source_location,
-        source_b=fact_b.source_location,
+        source_a=fact_a.source_location.to_source_pin(),
+        source_b=fact_b.source_location.to_source_pin(),
         fact_a=fact_a.fact_text,
         fact_b=fact_b.fact_text,
-        related_entities=list(set(fact_a.related_entities + fact_b.related_entities)),
     )
 
 
@@ -261,7 +260,7 @@ def get_contradictions_for_entity(
     entity_lower = entity_name.lower()
     return [
         c for c in contradictions
-        if any(entity_lower in e.lower() for e in c.related_entities)
+        if entity_lower in (c.fact_a or "").lower() or entity_lower in (c.fact_b or "").lower()
     ]
 
 

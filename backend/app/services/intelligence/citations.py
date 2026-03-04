@@ -92,7 +92,7 @@ def discover_dimensions(case: CaseFile) -> dict:
         entity_names = ", ".join(e.name for e in ev.entities) if ev.entities else "none"
 
         summaries.append(
-            f"- [{ev.evidence_type.value}] {ev.filename}: {summary_text} "
+            f"- [{getattr(ev.evidence_type, 'value', ev.evidence_type)}] {ev.filename}: {summary_text} "
             f"(Labels: {labels} | Entities: {entity_names})"
         )
 
@@ -343,10 +343,10 @@ class CitationIndex:
 
     def to_citation(self, fact: IndexedFact) -> Citation:
         """Convert an IndexedFact to a schema Citation object."""
+        source_pin = fact.source_location.to_source_pin()
         return Citation(
-            source=fact.source_location,
-            quote=fact.excerpt,
-            relevance=fact.reliability,
+            source=source_pin,
+            label=source_pin.detail,
         )
 
 
@@ -404,6 +404,11 @@ def build_citation_index(case: CaseFile) -> CitationIndex:
     # Step 3: Build the index
     for fact_data in classified:
         evidence_type = fact_data.get("evidence_type", EvidenceType.OTHER)
+        if isinstance(evidence_type, str):
+            try:
+                evidence_type = EvidenceType(evidence_type)
+            except ValueError:
+                evidence_type = EvidenceType.OTHER
 
         reliability = index.reliability_map.get(
             evidence_type,
