@@ -4,5 +4,5 @@ python-dotenv>=1.0.0
 pydantic>=2.0.0
 # pymupdf
 # pdfplumber
-# google-cloud-storage
-# google-generativeai
+google-cloud-storage>=2.16.0
+google-genai>=1.20.0

@@ -15,3 +15,5 @@ frontend/.next/
 .idea/
 .DS_Store
 
+.reconstruction_jobs.json
+.artifacts/
