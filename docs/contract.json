@@ -1,82 +1,190 @@
 {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "Clarion Report Contract",
-    "type": "object",
-    "properties": {
-        "report_id": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Clarion Report Contract",
+  "type": "object",
+  "properties": {
+    "report_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "failed"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
             "type": "string"
-        },
-        "sections": {
+          },
+          "type": {
+            "enum": [
+              "text",
+              "image",
+              "video",
+              "timeline"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "provenance": {
+            "enum": [
+              "evidence",
+              "public_context"
+            ]
+          },
+          "confidence_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ]
+          },
+          "citations": {
             "type": "array",
             "items": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "type": {
-                        "enum": [
-                            "text",
-                            "image",
-                            "video",
-                            "timeline"
-                        ]
-                    },
-                    "content": {
-                        "type": "string"
-                    },
-                    "media_urls": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "citations": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "document_id": {
-                                    "type": "string"
-                                },
-                                "page_number": {
-                                    "type": "integer"
-                                },
-                                "snippet": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "confidence_score": {
-                        "type": "number",
-                        "minimum": 0,
-                        "maximum": 1
-                    },
-                    "contradictions": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "counter_arguments": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
+              "type": "object",
+              "properties": {
+                "source_id": {
+                  "type": "string"
                 },
-                "required": [
-                    "id",
-                    "type",
-                    "content",
-                    "confidence_score"
-                ]
+                "segment_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "page_number": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "time_range_ms": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "snippet": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "uri": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "provenance": {
+                  "enum": [
+                    "evidence",
+                    "public_context"
+                  ]
+                }
+              },
+              "required": [
+                "source_id",
+                "provenance"
+              ]
             }
-        }
-    },
-    "required": [
-        "report_id",
-        "sections"
-    ]
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "image",
+                    "video"
+                  ]
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "generator": {
+                  "type": "string"
+                },
+                "manifest_uri": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "enum": [
+                    "pending",
+                    "ready",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "uri",
+                "generator",
+                "state"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "sort_key",
+          "provenance",
+          "confidence_score",
+          "citations",
+          "media",
+          "state"
+        ]
+      }
+    }
+  },
+  "required": [
+    "report_id",
+    "status",
+    "sections",
+    "warnings"
+  ]
 }

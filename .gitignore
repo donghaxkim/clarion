@@ -16,4 +16,6 @@ frontend/.next/
 .DS_Store
 
 .reconstruction_jobs.json
+.report_jobs.json
+.tmp_report_jobs.json
 .artifacts/

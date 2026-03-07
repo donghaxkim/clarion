@@ -1,4 +1,11 @@
-# Citation system: link claims to source doc + page
+# Citation system: link claims to source evidence and optional locator.
+from app.models import Citation, ReportProvenance
+
+
 def link_citation(claim: str, doc_id: str, page: int | None) -> dict:
-    # TODO
-    return {"document_id": doc_id, "page": page}
+    del claim
+    return Citation(
+        source_id=doc_id,
+        page_number=page,
+        provenance=ReportProvenance.evidence,
+    ).model_dump(mode="json")
