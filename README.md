@@ -30,4 +30,8 @@ PYTHONPATH=. uvicorn app.main:app --reload
 - **AI:** Google Gemini (optional)  
 - **Storage:** Local uploads by default; schema supports GCS URLs  
 
+<<<<<<< HEAD
 For full API reference, project structure, and schema details, see the in-repo docs or `backend/app/models/schema.py`.
+=======
+For full API reference, project structure, and schema details, see the in-repo docs or `backend/app/models/schema.py`.
+>>>>>>> a4b4aaae1b9074d2fc777885b74973a101aaed8d
