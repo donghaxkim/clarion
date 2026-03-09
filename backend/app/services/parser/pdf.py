@@ -86,6 +86,15 @@ ANALYSIS_PROMPT = """You are a legal document analyzer for a litigation support 
 
 Analyze the following document text extracted from a PDF and return structured JSON.
 
+IMPORTANT — document_type: Use ONLY these when the document is clearly that type of legal evidence:
+- police_report: official police/incident/accident report
+- medical_record: medical chart, doctor notes, hospital records
+- insurance_document: insurance policy, claim, or coverage doc
+- witness_statement: written statement from a witness about an incident
+- diagram: accident diagram, scene sketch, or technical drawing
+
+Use "other" for anything that is NOT legal evidence: resumes, CVs, cover letters, brochures, flyers, forms that are not incident-related, or any document that does not clearly fit the types above. When in doubt, use "other".
+
 DOCUMENT TEXT:
 ---
 {document_text}
@@ -96,7 +105,7 @@ Return a JSON object with these exact fields:
 {{
     "document_type": "police_report" | "medical_record" | "insurance_document" | "witness_statement" | "diagram" | "other",
 
-    "summary": "A concise 2-3 sentence summary of this document's key facts relevant to a legal case.",
+    "summary": "A concise 2-3 sentence summary of this document. If it is legal evidence, focus on key facts relevant to a case; if it is 'other' (e.g. resume), summarize what the document is.",
 
     "labels": ["list", "of", "relevant", "tags"],
     // Examples: "traffic_accident", "rear_end_collision", "intersection", "speeding",
