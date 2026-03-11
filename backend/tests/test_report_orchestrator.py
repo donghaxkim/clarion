@@ -82,7 +82,7 @@ class _FakeImageGenerator:
         del case_id, report_id, block_id, prompt
         return MediaAsset(
             kind=MediaAssetKind.image,
-            uri="https://example.test/impact.png",
+            uri="gs://test-bucket/report/impact.png",
             generator="gemini-3-pro-image-preview",
             manifest_uri="gs://test-bucket/report/image-manifest.json",
             state=ReportBlockState.ready,
@@ -94,7 +94,7 @@ class _FakeReconstructionService:
         del case_id, section_id, scene_description, evidence_refs, reference_image_uris
         return MediaAsset(
             kind=MediaAssetKind.video,
-            uri="https://example.test/impact.mp4",
+            uri="gs://test-bucket/report/impact.mp4",
             generator="veo-3.1-generate-preview",
             manifest_uri="gs://test-bucket/report/video-manifest.json",
             state=ReportBlockState.ready,
@@ -139,7 +139,6 @@ def test_orchestrator_runs_full_job_and_persists_report_manifest(tmp_path):
         image_generator=_FakeImageGenerator(),
         reconstruction_service=_FakeReconstructionService(),
         upload_bytes_fn=upload_fn,
-        gcs_uri_to_https_fn=lambda uri: f"https://storage.test/{uri.removeprefix('gs://')}",
     )
 
     asyncio.run(orchestrator.run_job(job.job_id, _request()))
@@ -155,6 +154,8 @@ def test_orchestrator_runs_full_job_and_persists_report_manifest(tmp_path):
     video_block = next(block for block in final.report.sections if block.id == "event-impact-video")
     assert image_block.media[0].uri.endswith("impact.png")
     assert video_block.media[0].uri.endswith("impact.mp4")
+    assert final.artifacts is not None
+    assert final.artifacts.report_url == final.artifacts.report_gcs_uri
 
     report_key = "reports/case-777/report-1/report.json"
     manifest_key = "reports/case-777/report-1/manifest.json"
@@ -175,7 +176,6 @@ def test_end_to_end_event_order_streams_blocks_before_media(tmp_path):
         image_generator=_FakeImageGenerator(),
         reconstruction_service=_FakeReconstructionService(),
         upload_bytes_fn=lambda data, gcs_key, content_type="application/octet-stream": f"gs://test/{gcs_key}",
-        gcs_uri_to_https_fn=lambda uri: f"https://storage.test/{uri.removeprefix('gs://')}",
     )
 
     asyncio.run(orchestrator.run_job(job.job_id, _request()))

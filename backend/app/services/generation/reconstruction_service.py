@@ -56,7 +56,7 @@ class ReconstructionMediaService:
 
         return MediaAsset(
             kind=MediaAssetKind.video,
-            uri=final_job.result.video_url,
+            uri=final_job.result.video_gcs_uri,
             generator=final_job.result.model_used,
             manifest_uri=final_job.result.manifest_gcs_uri,
             state=ReportBlockState.ready,

@@ -69,11 +69,6 @@ def _upload_recorder():
 
     return uploads, _upload
 
-
-def _uri_to_https(uri: str) -> str:
-    return f"https://example.test/{uri.removeprefix('gs://')}"
-
-
 def _run_job(
     tmp_path,
     *,
@@ -89,7 +84,6 @@ def _run_job(
         job_store=store,
         veo_client=fake_client or _FakeVeoClient(),
         upload_bytes_fn=upload_bytes_fn or default_upload,
-        gcs_uri_to_https_fn=_uri_to_https,
     )
     payload = payload or _payload()
     asyncio.run(orchestrator.run_job(job.job_id, payload))
@@ -111,6 +105,7 @@ def test_fast_only_mode_performs_single_veo_call_and_writes_manifest(tmp_path):
     assert final.result is not None
     assert final.result.model_used == VEO_FAST_MODEL
     assert final.result.evidence_refs == payload.evidence_refs
+    assert final.result.video_url == final.result.video_gcs_uri
 
     manifest_key = f"reconstructions/{payload.case_id}/{job.job_id}/manifest.json"
     manifest_payload = json.loads(uploads[manifest_key]["data"].decode("utf-8"))
@@ -132,6 +127,7 @@ def test_fast_then_final_mode_performs_two_veo_calls(tmp_path):
     assert final.status == ReconstructionJobStatus.completed
     assert final.result is not None
     assert final.result.model_used == VEO_FINAL_MODEL
+    assert final.result.video_url == final.result.video_gcs_uri
 
 
 def test_upload_failure_marks_job_failed(tmp_path):

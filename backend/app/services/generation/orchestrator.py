@@ -19,7 +19,11 @@ from app.services.generation.report import (
     drop_block,
     finalize_report,
 )
-from app.utils.storage import gcs_uri_to_https, upload_bytes
+from app.utils.storage import upload_bytes
+
+
+def _identity_uri(uri: str) -> str:
+    return uri
 
 
 class ReportGenerationOrchestrator:
@@ -31,14 +35,14 @@ class ReportGenerationOrchestrator:
         image_generator: GeminiImageGenerator | None = None,
         reconstruction_service: ReconstructionMediaService | None = None,
         upload_bytes_fn=upload_bytes,
-        gcs_uri_to_https_fn=gcs_uri_to_https,
+        storage_uri_fn=_identity_uri,
     ):
         self.job_store = job_store
         self.pipeline_factory = pipeline_factory
         self.image_generator = image_generator or GeminiImageGenerator()
         self.reconstruction_service = reconstruction_service or ReconstructionMediaService()
         self.upload_bytes_fn = upload_bytes_fn
-        self.gcs_uri_to_https_fn = gcs_uri_to_https_fn
+        self.storage_uri_fn = storage_uri_fn
 
     async def run_job(self, job_id: str, payload: GenerateReportRequest) -> None:
         job = self.job_store.get_job(job_id)
@@ -205,7 +209,7 @@ class ReportGenerationOrchestrator:
         )
         return ReportArtifactRefs(
             report_gcs_uri=report_gcs_uri,
-            report_url=self.gcs_uri_to_https_fn(report_gcs_uri),
+            report_url=self.storage_uri_fn(report_gcs_uri),
             manifest_gcs_uri=manifest_gcs_uri,
         )
 

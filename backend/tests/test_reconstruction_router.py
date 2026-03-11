@@ -1,5 +1,5 @@
 from app.main import app
-from app.models import ReconstructionJobStatus
+from app.models import ReconstructionJobStatus, ReconstructionResult
 from app.routers import reconstruction
 from app.services.video.reconstruction.job_store import ReconstructionJobStore
 from fastapi.testclient import TestClient
@@ -65,6 +65,13 @@ def test_polling_endpoint_reflects_status_transitions(monkeypatch, tmp_path):
     monkeypatch.setattr(reconstruction, "job_store", store)
     monkeypatch.setattr(reconstruction, "orchestrator", _NoopOrchestrator())
     monkeypatch.setattr(reconstruction.asyncio, "create_task", _discard_task)
+    monkeypatch.setattr(
+        reconstruction,
+        "materialize_browser_uri",
+        lambda uri, *, base_url=None: (
+            None if uri is None else uri.replace("gs://", "https://signed.test/")
+        ),
+    )
 
     client = TestClient(app)
     create_resp = client.post("/reconstruction/jobs", json=_payload())
@@ -81,3 +88,23 @@ def test_polling_endpoint_reflects_status_transitions(monkeypatch, tmp_path):
     assert upload_resp.status_code == 200
     assert upload_resp.json()["status"] == ReconstructionJobStatus.uploading.value
     assert upload_resp.json()["progress"] == 85
+
+    store.update_status(
+        job_id,
+        status=ReconstructionJobStatus.completed,
+        progress=100,
+        result=ReconstructionResult(
+            video_gcs_uri="gs://test-bucket/reconstructions/job/video.mp4",
+            video_url="gs://test-bucket/reconstructions/job/video.mp4",
+            model_used="veo-final",
+            duration_sec=8,
+            evidence_refs=["ev_1", "ev_2"],
+            manifest_gcs_uri="gs://test-bucket/reconstructions/job/manifest.json",
+        ),
+    )
+    completed_resp = client.get(f"/reconstruction/jobs/{job_id}")
+    assert completed_resp.status_code == 200
+    assert (
+        completed_resp.json()["result"]["video_url"]
+        == "https://signed.test/test-bucket/reconstructions/job/video.mp4"
+    )

@@ -7,7 +7,11 @@ from typing import Any
 
 from app.config import GEMINI_API_KEY, REPORT_IMAGE_MODEL, VEO_ALLOW_FAKE, VERTEX_LOCATION, VERTEX_PROJECT_ID
 from app.models import MediaAsset, MediaAssetKind, ReportBlockState
-from app.utils.storage import gcs_uri_to_https, upload_bytes
+from app.utils.storage import upload_bytes
+
+
+def _identity_uri(uri: str) -> str:
+    return uri
 
 
 class GeminiImageGenerator:
@@ -17,12 +21,12 @@ class GeminiImageGenerator:
         model: str = REPORT_IMAGE_MODEL,
         allow_fake: bool = VEO_ALLOW_FAKE,
         upload_bytes_fn=upload_bytes,
-        gcs_uri_to_https_fn=gcs_uri_to_https,
+        storage_uri_fn=_identity_uri,
     ):
         self.model = model
         self.allow_fake = allow_fake
         self.upload_bytes_fn = upload_bytes_fn
-        self.gcs_uri_to_https_fn = gcs_uri_to_https_fn
+        self.storage_uri_fn = storage_uri_fn
 
     async def generate(
         self,
@@ -60,7 +64,7 @@ class GeminiImageGenerator:
 
         return MediaAsset(
             kind=MediaAssetKind.image,
-            uri=self.gcs_uri_to_https_fn(image_gcs_uri),
+            uri=self.storage_uri_fn(image_gcs_uri),
             generator=model_used,
             manifest_uri=manifest_gcs_uri,
             state=ReportBlockState.ready,

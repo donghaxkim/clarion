@@ -17,7 +17,11 @@ from app.services.video.reconstruction.prompt_builder import (
     build_refined_prompt,
 )
 from app.services.video.reconstruction.veo_client import VeoClient
-from app.utils.storage import gcs_uri_to_https, upload_bytes
+from app.utils.storage import upload_bytes
+
+
+def _identity_uri(uri: str) -> str:
+    return uri
 
 
 class ReconstructionOrchestrator:
@@ -27,12 +31,12 @@ class ReconstructionOrchestrator:
         job_store: ReconstructionJobStore,
         veo_client: VeoClient,
         upload_bytes_fn=upload_bytes,
-        gcs_uri_to_https_fn=gcs_uri_to_https,
+        storage_uri_fn=_identity_uri,
     ):
         self.job_store = job_store
         self.veo_client = veo_client
         self.upload_bytes_fn = upload_bytes_fn
-        self.gcs_uri_to_https_fn = gcs_uri_to_https_fn
+        self.storage_uri_fn = storage_uri_fn
 
     async def run_job(self, job_id: str, payload: ReconstructionJobRequest) -> None:
         try:
@@ -93,7 +97,7 @@ class ReconstructionOrchestrator:
 
         return ReconstructionResult(
             video_gcs_uri=video_gcs_uri,
-            video_url=self.gcs_uri_to_https_fn(video_gcs_uri),
+            video_url=self.storage_uri_fn(video_gcs_uri),
             model_used=model_used,
             duration_sec=payload.duration_sec,
             evidence_refs=payload.evidence_refs,

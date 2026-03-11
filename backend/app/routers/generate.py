@@ -1,20 +1,26 @@
 import asyncio
 import json
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import FileResponse, StreamingResponse
 
-from app.config import REPORT_JOB_STORE_PATH
+from app.config import GCS_ALLOW_LOCAL_FALLBACK, LOCAL_ARTIFACTS_DIR, REPORT_JOB_STORE_PATH
 from app.models import (
+    Citation,
     GenerateReportJobAcceptedResponse,
     GenerateReportRequest,
+    MediaAsset,
+    ReportArtifactRefs,
+    ReportBlock,
     ReportDocument,
     ReportGenerationJobStatus,
     ReportGenerationJobStatusResponse,
     ReportStatus,
 )
 from app.services.generation import ReportGenerationOrchestrator, ReportJobStore
+from app.utils.storage import materialize_browser_uri
 
 router = APIRouter()
 
@@ -38,11 +44,11 @@ async def create_report_job(payload: GenerateReportRequest):
 
 
 @router.get("/jobs/{job_id}", response_model=ReportGenerationJobStatusResponse)
-async def get_report_job(job_id: str):
+async def get_report_job(job_id: str, request: Request):
     job = job_store.get_status(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
-    return job
+    return _materialize_job_for_client(job, request=request)
 
 
 @router.get("/jobs/{job_id}/stream")
@@ -71,11 +77,23 @@ async def stream_report_job(job_id: str):
 
 
 @router.get("/reports/{report_id}", response_model=ReportDocument)
-async def get_report(report_id: str):
+async def get_report(report_id: str, request: Request):
     report = job_store.get_report(report_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"Unknown report_id: {report_id}")
-    return report
+    return _materialize_report_for_client(report, request=request)
+
+
+@router.get("/artifacts/{artifact_path:path}")
+async def get_local_artifact(artifact_path: str):
+    if not GCS_ALLOW_LOCAL_FALLBACK:
+        raise HTTPException(status_code=404, detail="Local artifact fallback is disabled.")
+
+    resolved_path = _resolve_local_artifact_path(artifact_path)
+    if resolved_path is None or not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Unknown artifact path: {artifact_path}")
+
+    return FileResponse(resolved_path)
 
 
 def _encode_sse(event_type: str, payload: dict, event_id: int) -> str:
@@ -84,3 +102,115 @@ def _encode_sse(event_type: str, payload: dict, event_id: int) -> str:
         f"event: {event_type}\n"
         f"data: {json.dumps(payload)}\n\n"
     )
+
+
+def _materialize_job_for_client(
+    job: ReportGenerationJobStatusResponse,
+    *,
+    request: Request,
+) -> ReportGenerationJobStatusResponse:
+    report = (
+        _materialize_report_for_client(job.report, request=request)
+        if job.report is not None
+        else None
+    )
+    artifacts = (
+        _materialize_artifacts_for_client(job.artifacts, request=request)
+        if job.artifacts is not None
+        else None
+    )
+    return job.model_copy(update={"report": report, "artifacts": artifacts})
+
+
+def _materialize_report_for_client(
+    report: ReportDocument,
+    *,
+    request: Request,
+) -> ReportDocument:
+    sections = [
+        _materialize_block_for_client(block, request=request)
+        for block in report.sections
+    ]
+    return report.model_copy(update={"sections": sections})
+
+
+def _materialize_block_for_client(
+    block: ReportBlock,
+    *,
+    request: Request,
+) -> ReportBlock:
+    citations = [
+        _materialize_citation_for_client(citation, request=request)
+        for citation in block.citations
+    ]
+    media = [
+        _materialize_media_asset_for_client(asset, request=request)
+        for asset in block.media
+    ]
+    return block.model_copy(update={"citations": citations, "media": media})
+
+
+def _materialize_citation_for_client(
+    citation: Citation,
+    *,
+    request: Request,
+) -> Citation:
+    return citation.model_copy(
+        update={
+            "uri": _materialize_optional_uri(citation.uri, request=request),
+        }
+    )
+
+
+def _materialize_media_asset_for_client(
+    asset: MediaAsset,
+    *,
+    request: Request,
+) -> MediaAsset:
+    return asset.model_copy(
+        update={
+            "uri": _materialize_required_uri(asset.uri, request=request),
+            "manifest_uri": _materialize_optional_uri(asset.manifest_uri, request=request),
+        }
+    )
+
+
+def _materialize_artifacts_for_client(
+    artifacts: ReportArtifactRefs,
+    *,
+    request: Request,
+) -> ReportArtifactRefs:
+    browser_report_uri = artifacts.report_url or artifacts.report_gcs_uri
+    return artifacts.model_copy(
+        update={
+            "report_url": _materialize_optional_uri(browser_report_uri, request=request),
+        }
+    )
+
+
+def _materialize_required_uri(uri: str | None, *, request: Request) -> str | None:
+    try:
+        return materialize_browser_uri(uri, base_url=str(request.base_url))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to materialize a browser URL for artifact {uri!r}.",
+        ) from exc
+
+
+def _materialize_optional_uri(uri: str | None, *, request: Request) -> str | None:
+    if uri is None:
+        return None
+
+    try:
+        return materialize_browser_uri(uri, base_url=str(request.base_url))
+    except Exception:
+        return None
+
+
+def _resolve_local_artifact_path(artifact_path: str) -> Path | None:
+    base_dir = Path(LOCAL_ARTIFACTS_DIR).resolve()
+    candidate = (base_dir / artifact_path).resolve()
+    if candidate == base_dir or base_dir in candidate.parents:
+        return candidate
+    return None

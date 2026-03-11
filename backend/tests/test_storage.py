@@ -63,3 +63,63 @@ def test_download_file_uses_local_fallback_when_enabled(monkeypatch, tmp_path):
     target = tmp_path / "downloads/out.mp4"
     storage_module.download_file(f"gs://test-bucket/{key}", str(target))
     assert target.read_bytes() == b"payload"
+
+
+def test_gcs_uri_to_signed_url_uses_storage_client(monkeypatch):
+    class _Blob:
+        def __init__(self, key: str):
+            self.key = key
+
+        def generate_signed_url(self, *, version, expiration, method):
+            assert version == "v4"
+            assert method == "GET"
+            assert expiration.total_seconds() == storage_module.GCS_SIGNED_URL_TTL_SECONDS
+            return f"https://signed.test/{self.key}?sig=abc123"
+
+    class _Bucket:
+        def blob(self, key: str):
+            return _Blob(key)
+
+    class _Client:
+        def bucket(self, bucket_name: str):
+            assert bucket_name == "test-bucket"
+            return _Bucket()
+
+    monkeypatch.setattr(storage_module, "GCS_BUCKET", "test-bucket")
+    monkeypatch.setattr(
+        storage_module,
+        "GCS_SIGNED_URL_TTL_SECONDS",
+        900,
+    )
+
+    google_module = ModuleType("google")
+    cloud_module = ModuleType("google.cloud")
+    cloud_module.storage = type("StorageModule", (), {"Client": _Client})()
+    google_module.cloud = cloud_module
+    monkeypatch.setitem(sys.modules, "google", google_module)
+    monkeypatch.setitem(sys.modules, "google.cloud", cloud_module)
+
+    signed_url = storage_module.gcs_uri_to_signed_url("gs://test-bucket/reports/demo/image.png")
+    assert signed_url == "https://signed.test/reports/demo/image.png?sig=abc123"
+
+
+def test_materialize_browser_uri_uses_local_artifact_when_signing_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(storage_module, "GCS_ALLOW_LOCAL_FALLBACK", True)
+    monkeypatch.setattr(storage_module, "LOCAL_ARTIFACTS_DIR", str(tmp_path))
+
+    key = "reconstructions/job/video.mp4"
+    artifact = tmp_path / key
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"payload")
+
+    def _fail_signing(uri: str, *, expiration_seconds: int = 3600) -> str:
+        del uri, expiration_seconds
+        raise RuntimeError("signing unavailable")
+
+    monkeypatch.setattr(storage_module, "gcs_uri_to_signed_url", _fail_signing)
+
+    browser_url = storage_module.materialize_browser_uri(
+        "gs://test-bucket/reconstructions/job/video.mp4",
+        base_url="http://127.0.0.1:8000",
+    )
+    assert browser_url == "http://127.0.0.1:8000/generate/artifacts/reconstructions/job/video.mp4"
