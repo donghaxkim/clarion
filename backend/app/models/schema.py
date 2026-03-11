@@ -10,12 +10,18 @@ RULES:
 
 Data flow:
   Upload → EvidenceItem (You) → CaseFile (You) → ReportSection stream (Larris) → UI (Person B)
+
+In-memory only (not persisted):
+  EvidenceItem._analysis — parsers stash key_facts/timeline_events here for the pipeline.
+  Not serialized by Pydantic (intentional). If you persist CaseFile to DB and reload,
+  _analysis will be gone. For the hackathon this is fine. For production, use a
+  separate FactStore table and link by evidence_id.
 """
 
 from __future__ import annotations
 from enum import Enum
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from pydantic import BaseModel, Field, PrivateAttr
+from typing import Optional, Literal, Any
 from datetime import datetime
 import uuid
 
@@ -147,6 +153,11 @@ class EvidenceItem(BaseModel):
     """
     YOUR primary output — one per uploaded file.
     Your parser creates this, Larris reads it.
+
+    In-memory cache (not serialized):
+      _analysis: Optional[dict] — parsers set this to a dict with "key_facts",
+      "timeline_events", "labels", "summary", etc. Used by citations and report
+      generation. Does not survive CaseFile → DB → reload. Production: FactStore.
     """
     id: str = Field(default_factory=_id)
     filename: str
@@ -157,6 +168,9 @@ class EvidenceItem(BaseModel):
     labels: list[str] = []                    # auto-tags: ["traffic_accident", "rear_end"]
     summary: Optional[str] = None             # one-paragraph AI summary
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # In-memory only; never serialized. Parsers set this; citations/report read it.
+    _analysis: Optional[dict[str, Any]] = PrivateAttr(default=None)
 
 
 # ═══════════════════════════════════════════════

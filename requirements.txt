@@ -1,8 +1,25 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CLARION — Python dependencies
+# Install: pip install -r requirements.txt (prefer: python -m pip install -r requirements.txt)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Core
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# API server
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-# pymupdf
-# pdfplumber
-# google-cloud-storage
-# google-generativeai
+
+# AI (Gemini)
+google-genai>=1.0.0
+
+# Parsers
+pdfplumber>=0.10.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional (uncomment if needed)
+# ─────────────────────────────────────────────────────────────────────────────
+# google-cloud-storage   # GCS uploads in production
+# Pillow                # image resizing before sending to Gemini (see image.py)
+# pydub                 # alternative audio conversion if not using ffmpeg
