@@ -1,3 +1,13 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CLARION — Python dependencies
+# Install: pip install -r requirements.txt (prefer: python -m pip install -r requirements.txt)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Core
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# API server
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0

@@ -1,219 +1,373 @@
+"""
+CLARION — Shared Data Schema v2
+================================
+The contract between all three team members.
+
+RULES:
+  - Do NOT add a field unless you will populate it before the demo
+  - Do NOT change a model without telling the team
+  - All media stored in GCS — schema only holds URLs
+
+Data flow:
+  Upload → EvidenceItem (You) → CaseFile (You) → ReportSection stream (Larris) → UI (Person B)
+
+In-memory only (not persisted):
+  EvidenceItem._analysis — parsers stash key_facts/timeline_events here for the pipeline.
+  Not serialized by Pydantic (intentional). If you persist CaseFile to DB and reload,
+  _analysis will be gone. For the hackathon this is fine. For production, use a
+  separate FactStore table and link by evidence_id.
+"""
+
 from __future__ import annotations
-
-from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
-
-from pydantic import BaseModel, Field, field_validator
-
-
-class EvidenceItemType(str, Enum):
-    pdf = "pdf"
-    image = "image"
-    audio = "audio"
-    video = "video"
-    transcript = "transcript"
-    medical = "medical"
-    official_record = "official_record"
-    other = "other"
+from pydantic import BaseModel, Field, PrivateAttr
+from typing import Optional, Literal, Any
+from datetime import datetime
+import uuid
 
 
-class ReportBlockType(str, Enum):
-    text = "text"
-    image = "image"
-    video = "video"
-    timeline = "timeline"
+def _id() -> str:
+    return uuid.uuid4().hex[:12]
 
 
-class ReportProvenance(str, Enum):
-    evidence = "evidence"
-    public_context = "public_context"
+def new_id() -> str:
+    """Public alias for _id; used by parsers and services."""
+    return _id()
 
 
-class ReportBlockState(str, Enum):
-    pending = "pending"
-    ready = "ready"
-    failed = "failed"
+# ═══════════════════════════════════════════════
+#  PRIMITIVES — Small reusable pieces
+# ═══════════════════════════════════════════════
 
-
-class ReportStatus(str, Enum):
-    running = "running"
-    completed = "completed"
-    failed = "failed"
-
-
-class ReportGenerationJobStatus(str, Enum):
-    queued = "queued"
-    planning = "planning"
-    composing = "composing"
-    generating_media = "generating_media"
-    completed = "completed"
-    failed = "failed"
-
-
-class MediaAssetKind(str, Enum):
-    image = "image"
-    video = "video"
-
-
-class SourceSpan(BaseModel):
-    segment_id: Optional[str] = None
-    page_number: Optional[int] = Field(default=None, ge=1)
-    time_range_ms: Optional[list[int]] = Field(default=None, min_length=2, max_length=2)
-    snippet: Optional[str] = None
-    uri: Optional[str] = None
-
-    @field_validator("time_range_ms")
-    @classmethod
-    def validate_time_range(cls, value: list[int] | None) -> list[int] | None:
-        if value is None:
-            return value
-        start, end = value
-        if start < 0 or end < start:
-            raise ValueError("time_range_ms must be an ordered, non-negative start/end pair")
-        return value
-
-
-class EvidenceItem(BaseModel):
-    evidence_id: str = Field(min_length=1)
-    kind: EvidenceItemType
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    extracted_text: Optional[str] = None
-    media_uri: Optional[str] = None
-    source_uri: Optional[str] = None
-    source_spans: list[SourceSpan] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
-
-
-class EventCandidate(BaseModel):
-    event_id: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    sort_key: str = Field(min_length=1)
-    timestamp_label: Optional[str] = None
-    evidence_refs: list[str] = Field(default_factory=list)
-    scene_description: Optional[str] = None
-    image_prompt_hint: Optional[str] = None
-    reference_image_uris: list[str] = Field(default_factory=list, max_length=3)
-    public_context_queries: list[str] = Field(default_factory=list, max_length=3)
-
-    @field_validator("evidence_refs", "reference_image_uris", "public_context_queries")
-    @classmethod
-    def strip_string_lists(cls, values: list[str]) -> list[str]:
-        return [value.strip() for value in values if value and value.strip()]
-
-
-class EntityMention(BaseModel):
-    entity_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    role: Optional[str] = None
+class MediaRef(BaseModel):
+    """Reference to a file in GCS. Never embed raw bytes in the schema."""
+    url: str
+    media_type: str                           # "image/jpeg", "video/mp4", "application/pdf", "audio/mp3"
     description: Optional[str] = None
 
 
-class CaseEvidenceBundle(BaseModel):
-    case_id: str = Field(min_length=1)
-    case_summary: Optional[str] = None
-    generation_instructions: Optional[str] = None
-    evidence_items: list[EvidenceItem] = Field(min_length=1)
-    event_candidates: list[EventCandidate] = Field(default_factory=list)
-    entities: list[EntityMention] = Field(default_factory=list)
+class SourcePin(BaseModel):
+    """
+    Points to exactly where a fact lives in the raw evidence.
+    This is how citations trace back to source material.
+    """
+    evidence_id: str                          # which EvidenceItem
+    detail: str                               # human-readable: "Page 2, paragraph 3" or "0:42-0:47" or "top-left of image"
+    excerpt: Optional[str] = None             # short verbatim snippet
 
 
-class GenerateReportRequest(BaseModel):
-    bundle: CaseEvidenceBundle
-    user_id: str = Field(default="clarion-user", min_length=1)
-    enable_public_context: Optional[bool] = None
-    max_images: Optional[int] = Field(default=None, ge=0, le=10)
-    max_reconstructions: Optional[int] = Field(default=None, ge=0, le=10)
+class SourceLocation(BaseModel):
+    """
+    Parser-friendly location within evidence (page or time range).
+    Convert to SourcePin for Citation via to_source_pin().
+    """
+    evidence_id: str
+    page: Optional[int] = None
+    timestamp_start: Optional[float] = None
+    timestamp_end: Optional[float] = None
+    excerpt: Optional[str] = None
 
+    def to_source_pin(self) -> SourcePin:
+        if self.page is not None:
+            detail = f"Page {self.page}"
+        elif self.timestamp_start is not None and self.timestamp_end is not None:
+            detail = f"{self.timestamp_start:.1f}-{self.timestamp_end:.1f}s"
+        elif self.timestamp_start is not None:
+            detail = f"{self.timestamp_start:.1f}s"
+        else:
+            detail = "Source"
+        return SourcePin(evidence_id=self.evidence_id, detail=detail, excerpt=self.excerpt)
+
+
+# ═══════════════════════════════════════════════
+#  STAGE 1 — EVIDENCE IN (Your domain)
+# ═══════════════════════════════════════════════
+
+EVIDENCE_TYPES = Literal[
+    "police_report",
+    "medical_record",
+    "witness_statement",
+    "photo",
+    "dashcam_video",
+    "surveillance_video",
+    "insurance_document",
+    "diagram",
+    "other",
+]
+
+
+class EvidenceType(str, Enum):
+    """Enum alias for EVIDENCE_TYPES; use .value for schema fields."""
+    POLICE_REPORT = "police_report"
+    MEDICAL_RECORD = "medical_record"
+    WITNESS_STATEMENT = "witness_statement"
+    PHOTO = "photo"
+    DASHCAM_VIDEO = "dashcam_video"
+    SURVEILLANCE_VIDEO = "surveillance_video"
+    INSURANCE_DOCUMENT = "insurance_document"
+    DIAGRAM = "diagram"
+    OTHER = "other"
+
+
+class SpeakerSegment(BaseModel):
+    """One chunk of speech from audio transcription."""
+    speaker: str                              # "Speaker 1" or identified name
+    start: float                              # seconds
+    end: float                                # seconds
+    text: str
+
+
+class VideoFrame(BaseModel):
+    """A key frame extracted from video by Larris's pipeline."""
+    timestamp: float                          # seconds into the video
+    media: MediaRef                           # the extracted frame image in GCS
+    description: Optional[str] = None         # AI-generated scene description
+
+
+class ExtractedContent(BaseModel):
+    """
+    Everything pulled from a single piece of evidence.
+    Only populate what applies — a PDF won't have speaker_segments,
+    an audio file won't have text from OCR.
+    """
+    text: Optional[str] = None
+    tables: Optional[list[dict]] = None
+    speaker_segments: Optional[list[SpeakerSegment]] = None
+    video_frames: Optional[list[VideoFrame]] = None
+    image_description: Optional[str] = None
+
+
+class Entity(BaseModel):
+    """
+    A person, vehicle, location, or other named thing found in evidence.
+    Linked across documents by matching on name/aliases.
+    """
+    id: str = Field(default_factory=_id)
+    type: Literal["person", "vehicle", "location", "date", "injury", "organization"]
+    name: str                                 # "Witness 1 — Jane Doe", "Red 2019 Honda Civic"
+    aliases: list[str] = []                   # other references to the same entity
+    mentions: list[SourceLocation] = []        # where this entity appears in evidence
+
+
+class EvidenceItem(BaseModel):
+    """
+    YOUR primary output — one per uploaded file.
+    Your parser creates this, Larris reads it.
+
+    In-memory cache (not serialized):
+      _analysis: Optional[dict] — parsers set this to a dict with "key_facts",
+      "timeline_events", "labels", "summary", etc. Used by citations and report
+      generation. Does not survive CaseFile → DB → reload. Production: FactStore.
+    """
+    id: str = Field(default_factory=_id)
+    filename: str
+    evidence_type: EVIDENCE_TYPES
+    media: MediaRef                           # the original file in GCS
+    content: ExtractedContent
+    entities: list[Entity] = []
+    labels: list[str] = []                    # auto-tags: ["traffic_accident", "rear_end"]
+    summary: Optional[str] = None             # one-paragraph AI summary
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # In-memory only; never serialized. Parsers set this; citations/report read it.
+    _analysis: Optional[dict[str, Any]] = PrivateAttr(default=None)
+
+
+# ═══════════════════════════════════════════════
+#  STAGE 2 — INTELLIGENCE (Your domain)
+# ═══════════════════════════════════════════════
 
 class Citation(BaseModel):
-    source_id: str = Field(min_length=1)
-    segment_id: Optional[str] = None
-    page_number: Optional[int] = Field(default=None, ge=1)
-    time_range_ms: Optional[list[int]] = Field(default=None, min_length=2, max_length=2)
-    snippet: Optional[str] = None
-    uri: Optional[str] = None
-    provenance: ReportProvenance = ReportProvenance.evidence
-
-    @field_validator("time_range_ms")
-    @classmethod
-    def validate_time_range(cls, value: list[int] | None) -> list[int] | None:
-        if value is None:
-            return value
-        start, end = value
-        if start < 0 or end < start:
-            raise ValueError("time_range_ms must be an ordered, non-negative start/end pair")
-        return value
+    """Links a report claim back to raw evidence."""
+    id: str = Field(default_factory=_id)
+    source: SourcePin
+    label: str                                # short display text: "Police Report, p.2"
 
 
-class MediaAsset(BaseModel):
-    kind: MediaAssetKind
-    uri: str = Field(min_length=1)
-    generator: str = Field(min_length=1)
-    manifest_uri: Optional[str] = None
-    state: ReportBlockState = ReportBlockState.ready
+class ContradictionSeverity(str, Enum):
+    """Enum alias for contradiction severity."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
-class ReportBlock(BaseModel):
-    id: str = Field(min_length=1)
-    type: ReportBlockType
-    title: Optional[str] = None
-    content: Optional[str] = None
-    sort_key: str = Field(min_length=1)
-    provenance: ReportProvenance = ReportProvenance.evidence
-    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    citations: list[Citation] = Field(default_factory=list)
-    media: list[MediaAsset] = Field(default_factory=list)
-    state: ReportBlockState = ReportBlockState.ready
+class Contradiction(BaseModel):
+    """Two facts from different sources that conflict."""
+    id: str = Field(default_factory=_id)
+    severity: Literal["low", "medium", "high"]
+    description: str                          # "Police report says northbound, Witness 1 says eastbound"
+    source_a: SourcePin
+    source_b: SourcePin
+    fact_a: str
+    fact_b: str
 
 
-class ReportArtifactRefs(BaseModel):
-    report_gcs_uri: Optional[str] = None
-    report_url: Optional[str] = None
-    manifest_gcs_uri: Optional[str] = None
+class MissingInfo(BaseModel):
+    """A gap in the evidence that could weaken the case."""
+    id: str = Field(default_factory=_id)
+    severity: Literal["suggestion", "warning", "critical"]
+    description: str                          # "No medical imaging for claimed spinal injury"
+    recommendation: Optional[str] = None      # "Request MRI records from treating physician"
 
 
-class ReportDocument(BaseModel):
-    report_id: str = Field(min_length=1)
-    status: ReportStatus = ReportStatus.running
-    sections: list[ReportBlock] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    generated_at: Optional[datetime] = None
+# ═══════════════════════════════════════════════
+#  STAGE 3 — REPORT OUT (Larris's domain)
+# ═══════════════════════════════════════════════
+
+BLOCK_TYPES = Literal[
+    "heading",
+    "text",
+    "image",                                  # AI-generated illustration/reconstruction
+    "evidence_image",                         # original uploaded photo with annotations
+    "video",                                  # AI-generated reconstruction clip
+    "timeline",
+    "diagram",
+    "counter_argument",
+]
+
+SectionType = BLOCK_TYPES  # alias for code that imports SectionType
 
 
-class ReportJobEvent(BaseModel):
-    event_id: int = Field(ge=0)
-    event_type: str = Field(min_length=1)
-    payload: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
+class TimelineEvent(BaseModel):
+    """A single event on the zoomable timeline."""
+    time_display: str                         # "2:34 PM" or "March 12, 2024"
+    sort_key: float                           # unix timestamp for ordering
+    title: str
+    description: Optional[str] = None
+    evidence_ids: list[str] = []              # which evidence items support this
 
 
-class GenerateReportJobAcceptedResponse(BaseModel):
-    job_id: str
-    report_id: str
-    status_url: str
-    stream_url: str
-    report_url: str
+class ReportSection(BaseModel):
+    """
+    A single block in the generated report.
+    The full report = ordered list of these.
+
+    LARRIS generates these.
+    PERSON B renders based on block_type.
+    Side-panel editor targets by section ID.
+    """
+    id: str = Field(default_factory=_id)
+    block_type: BLOCK_TYPES
+    order: int                                # position in report, 0-indexed
+
+    # Content — populate based on block_type
+    text: Optional[str] = None                # for heading, text, counter_argument
+    heading_level: Optional[int] = None       # 1, 2, or 3 (only for heading blocks)
+    media: Optional[MediaRef] = None          # for image, video, diagram, evidence_image
+    timeline_events: Optional[list[TimelineEvent]] = None
+    annotations: Optional[list[dict]] = None  # for evidence_image: [{"x": 0.5, "y": 0.3, "label": "Point of impact"}]
+
+    # Intelligence
+    citations: list[Citation] = []
+    contradiction_ids: list[str] = []         # IDs of Contradiction objects relevant to this section
+    entity_ids: list[str] = []                # IDs of Entity objects mentioned here
 
 
-class ReportGenerationJobStatusResponse(BaseModel):
-    job_id: str
-    report_id: str
-    status: ReportGenerationJobStatus
-    progress: int = Field(ge=0, le=100)
-    warnings: list[str] = Field(default_factory=list)
-    error: Optional[str] = None
-    report: Optional[ReportDocument] = None
-    artifacts: Optional[ReportArtifactRefs] = None
+# ═══════════════════════════════════════════════
+#  TOP-LEVEL — THE CASE FILE
+# ═══════════════════════════════════════════════
+
+class CaseFile(BaseModel):
+    """
+    The entire case. Stored in DB. Passed between services.
+    Everything links by ID — nothing deeply nested.
+    """
+    id: str = Field(default_factory=_id)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Case info (from intake chat)
+    title: Optional[str] = None               # "Smith v. Johnson — Rear-end Collision"
+    case_type: Optional[str] = None           # "personal_injury", "property_damage"
+    intake_summary: Optional[str] = None      # what the user described in chat
+
+    # Stage 1
+    evidence: list[EvidenceItem] = []
+    entities: list[Entity] = []               # merged cross-document entities
+
+    # Stage 2
+    contradictions: list[Contradiction] = []
+    missing_info: list[MissingInfo] = []
+
+    # Stage 3
+    report_sections: list[ReportSection] = []
+
+    # Status
+    status: Literal["intake", "parsing", "analyzing", "generating", "complete"] = "intake"
 
 
-class ReportGenerationJobRecord(ReportGenerationJobStatusResponse):
-    events: list[ReportJobEvent] = Field(default_factory=list)
+# ═══════════════════════════════════════════════
+#  STREAMING CONTRACT (SSE: Larris → Person B)
+# ═══════════════════════════════════════════════
+
+class StreamEvent(BaseModel):
+    """
+    What gets sent over SSE during report generation.
+    Person B listens and renders blocks in real time.
+
+    Event types:
+      section_start    → new block arriving, render skeleton/placeholder
+      section_delta    → partial text chunk (typewriter effect)
+      section_complete → block fully generated, render final version
+      intelligence     → contradiction or missing info detected mid-generation
+      status           → case status changed
+      error            → something went wrong
+      done             → generation finished
+    """
+    event: Literal[
+        "section_start",
+        "section_delta",
+        "section_complete",
+        "intelligence",
+        "status",
+        "error",
+        "done",
+    ]
+
+    # For section_start and section_complete
+    section: Optional[ReportSection] = None
+
+    # For section_delta
+    section_id: Optional[str] = None
+    delta_text: Optional[str] = None
+
+    # For intelligence
+    contradiction: Optional[Contradiction] = None
+    missing: Optional[MissingInfo] = None
+
+    # For status
+    status: Optional[str] = None
+    progress: Optional[float] = None          # 0.0 to 1.0
+
+    # For error
+    message: Optional[str] = None
 
 
-# Backwards-compatible aliases for existing imports while the rest of the app catches up.
-SectionType = ReportBlockType
-ReportSection = ReportBlock
+# ═══════════════════════════════════════════════
+#  API CONTRACTS (FastAPI request/response models)
+# ═══════════════════════════════════════════════
+
+class UploadResponse(BaseModel):
+    """POST /upload returns this after your parser runs."""
+    case_id: str
+    evidence_item: EvidenceItem
+    entities_found: int
+    labels: list[str]
+
+
+class GenerateRequest(BaseModel):
+    """POST /generate kicks off report generation."""
+    case_id: str
+    focus_entities: Optional[list[str]] = None
+    include_counter_arguments: bool = True
+
+
+class EditSectionRequest(BaseModel):
+    """POST /edit-section from the side panel chatbot."""
+    case_id: str
+    section_id: str
+    instruction: str                          # "make the speed estimate more conservative"
+
+
+class EditSectionResponse(BaseModel):
+    """POST /edit-section returns the updated block."""
+    updated_section: ReportSection

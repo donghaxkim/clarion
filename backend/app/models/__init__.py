@@ -7,7 +7,7 @@ from app.models.reconstruction import (
     ReconstructionJobStatusResponse,
     ReconstructionResult,
 )
-from app.models.schema import (
+from app.models.report_schema import (
     CaseEvidenceBundle,
     Citation,
     EntityMention,
@@ -21,6 +21,7 @@ from app.models.schema import (
     ReportArtifactRefs,
     ReportBlock,
     ReportBlockState,
+    ReportBlockType,
     ReportDocument,
     ReportGenerationJobRecord,
     ReportGenerationJobStatus,
@@ -29,13 +30,24 @@ from app.models.schema import (
     ReportProvenance,
     ReportSection,
     ReportStatus,
-    ReportBlockType,
     SectionType,
     SourceSpan,
 )
 
+# Backward-compatible re-exports from the legacy schema so code that does
+# ``from app.models import EvidenceType`` (etc.) still works.
+from app.models.schema import (  # noqa: F811
+    BLOCK_TYPES,
+    EVIDENCE_TYPES,
+    ContradictionSeverity,
+    EvidenceType,
+    SourceLocation,
+    SourcePin,
+    new_id,
+)
+
 __all__ = [
-    "AspectRatio",
+    # report_schema (reporting pipeline)
     "CaseEvidenceBundle",
     "Citation",
     "EntityMention",
@@ -46,12 +58,6 @@ __all__ = [
     "GenerateReportRequest",
     "MediaAsset",
     "MediaAssetKind",
-    "QualityMode",
-    "ReconstructionCreateJobResponse",
-    "ReconstructionJobRequest",
-    "ReconstructionJobStatus",
-    "ReconstructionJobStatusResponse",
-    "ReconstructionResult",
     "ReportArtifactRefs",
     "ReportBlock",
     "ReportBlockState",
@@ -66,4 +72,20 @@ __all__ = [
     "ReportStatus",
     "SectionType",
     "SourceSpan",
+    # reconstruction
+    "AspectRatio",
+    "QualityMode",
+    "ReconstructionCreateJobResponse",
+    "ReconstructionJobRequest",
+    "ReconstructionJobStatus",
+    "ReconstructionJobStatusResponse",
+    "ReconstructionResult",
+    # legacy schema backward-compat
+    "BLOCK_TYPES",
+    "EVIDENCE_TYPES",
+    "ContradictionSeverity",
+    "EvidenceType",
+    "SourceLocation",
+    "SourcePin",
+    "new_id",
 ]
