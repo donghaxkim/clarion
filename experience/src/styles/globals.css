@@ -1,0 +1,288 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Newsreader:ital,wght@0,400;0,500;1,400;1,500&family=DM+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:           #FAFAF8;
+  --bg-surface:   #FFFFFF;
+  --bg-elevated:  #F5F4F0;
+  --border:       #E8E6E0;
+  --border-focus: #C9A84C;
+
+  --text-primary:   #1A1A1A;
+  --text-secondary: #6B6860;
+  --text-tertiary:  #9C9890;
+
+  --accent:       #C9A84C;
+  --accent-light: #F5EDD4;
+
+  --severity-high:    #C44B4B;
+  --severity-high-bg: #FDF2F2;
+  --severity-med:     #C98A2E;
+  --severity-med-bg:  #FEF7EC;
+  --severity-low:     #6B9B7E;
+  --severity-low-bg:  #F0F7F2;
+
+  --evidence-police:   #4A6FA5;
+  --evidence-medical:  #6B9B7E;
+  --evidence-witness:  #9B6B9B;
+  --evidence-photo:    #C98A2E;
+  --evidence-video:    #C44B4B;
+  --evidence-audio:    #6B6FA5;
+  --evidence-other:    #9C9890;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 400;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* Report typography */
+.report-text {
+  font-family: 'Newsreader', serif;
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--text-primary);
+}
+
+.report-heading {
+  font-family: 'Newsreader', serif;
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* Evidence type borders */
+.border-evidence-police  { border-left-color: var(--evidence-police) !important; }
+.border-evidence-medical { border-left-color: var(--evidence-medical) !important; }
+.border-evidence-witness { border-left-color: var(--evidence-witness) !important; }
+.border-evidence-photo   { border-left-color: var(--evidence-photo) !important; }
+.border-evidence-video   { border-left-color: var(--evidence-video) !important; }
+.border-evidence-audio   { border-left-color: var(--evidence-audio) !important; }
+.border-evidence-other   { border-left-color: var(--evidence-other) !important; }
+
+/* Mono */
+.font-mono-evidence {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+}
+
+/* Amber cursor for streaming */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.streaming-cursor {
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  background-color: var(--accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+/* Progress bar shimmer */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 25%,
+    var(--border) 50%,
+    var(--bg-elevated) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Progress bar */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.progress-indeterminate {
+  animation: progress-indeterminate 1.5s ease-in-out infinite;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Citation superscript */
+.citation-ref {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: super;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  line-height: 0;
+}
+.citation-ref:hover {
+  text-decoration: underline;
+}
+
+/* Entity highlight in text */
+.entity-mention {
+  border-bottom: 1px dotted var(--accent);
+  cursor: pointer;
+}
+.entity-mention:hover {
+  background-color: var(--accent-light);
+}
+
+/* ─── Canvas / React Flow ─────────────────────────────────────────────────── */
+
+/* Override React Flow defaults */
+.react-flow__renderer {
+  background: var(--bg);
+}
+
+/* Node recluster animation */
+.is-reclustering .react-flow__node {
+  transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* Edge draw-in animation */
+@keyframes drawThread {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes travelDots {
+  to { stroke-dashoffset: -20; }
+}
+
+@keyframes nodePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes borderPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(201, 168, 76, 0); }
+  50% { box-shadow: 0 0 0 2px rgba(201, 168, 76, 0.4); }
+}
+
+@keyframes completionPop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+@keyframes radialPulse {
+  0%   { opacity: 0.08; transform: scale(0.3); }
+  60%  { opacity: 0.04; transform: scale(1.2); }
+  100% { opacity: 0; transform: scale(1.8); }
+}
+
+.evidence-node--uploading {
+  animation: nodePulse 1.5s ease-in-out infinite;
+}
+
+.evidence-node--analyzing {
+  animation: borderPulse 0.8s ease-in-out 3;
+}
+
+.evidence-node--complete-pop {
+  animation: completionPop 0.3s ease-out forwards;
+}
+
+.canvas-analyze-wave {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at center, var(--accent-light) 0%, transparent 60%);
+  animation: radialPulse 1.5s ease-out forwards;
+  z-index: 1;
+}
+
+/* React Flow edge path draw-in */
+.edge-draw-in .react-flow__edge-path {
+  stroke-dasharray: 1200;
+  stroke-dashoffset: 1200;
+  animation: drawThread 0.6s ease-out forwards;
+}
+
+/* Contradiction traveling dots */
+.edge-contradiction-animated .react-flow__edge-path {
+  stroke-dasharray: 6 6;
+  animation: travelDots 0.8s linear infinite;
+}
+
+/* React Flow - hide default attribution */
+.react-flow__attribution {
+  display: none;
+}
+
+/* Handle visibility */
+.react-flow__handle {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.react-flow__handle.has-connections,
+.react-flow__node:hover .react-flow__handle {
+  opacity: 0;
+}
+
+.react-flow__handle.show-handle {
+  opacity: 1;
+}
+
+/* Canvas drag-over overlay */
+.canvas-dragover-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(201, 168, 76, 0.05);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Edge hover states */
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-opacity: 0.9 !important;
+  stroke-width: 2px !important;
+}

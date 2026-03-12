@@ -25,7 +25,6 @@ import {
   EdgeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 
 const AgentOrb = dynamic(
@@ -160,7 +159,6 @@ function buildInitialMockEdges(nodes: Node[]): Edge[] {
 // ─── Inner Canvas (uses useReactFlow) ─────────────────────────────────────────
 
 function EvidenceCanvasInner() {
-  const router = useRouter();
   const { fitView } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -434,12 +432,56 @@ function EvidenceCanvasInner() {
     setIsAnalyzing(false);
   }, [nodes, isAnalyzing, caseId, setNodes, setEdges, cluster]);
 
-  // ── View Report ──────────────────────────────────────────────────────────
-  const handleViewReport = useCallback(() => {
-    if (caseId) {
-      router.push(`/case/${caseId}/analysis`);
-    }
-  }, [caseId, router]);
+  // ── Generate Report (inline sidebar) ────────────────────────────────────
+  const handleGenerateReport = useCallback(() => {
+    if (isGenerating || reportSidebarOpen || !caseId) return;
+    setReportSidebarOpen(true);
+    setIsGenerating(true);
+    setReportDone(false);
+    setReportSections([]);
+
+    generateReport(caseId).catch(() => {/* non-fatal */});
+
+    streamReport(
+      caseId,
+      (event) => {
+        if (event.event === 'section_start') {
+          setReportSections((prev) => [
+            ...prev,
+            { section: event.section, text: '', streaming: true, complete: false },
+          ]);
+        } else if (event.event === 'section_delta') {
+          setReportSections((prev) =>
+            prev.map((s) =>
+              s.section.id === event.section_id
+                ? { ...s, text: s.text + event.delta_text }
+                : s
+            )
+          );
+        } else if (event.event === 'section_complete') {
+          setReportSections((prev) =>
+            prev.map((s) =>
+              s.section.id === event.section_id
+                ? { ...s, streaming: false, complete: true }
+                : s
+            )
+          );
+        } else if (event.event === 'done') {
+          setIsGenerating(false);
+          setReportDone(true);
+        }
+      },
+      () => {
+        setIsGenerating(false);
+        setReportDone(true);
+      }
+    );
+  }, [isGenerating, reportSidebarOpen, caseId]);
+
+  const handleAnalyzeAndGenerate = useCallback(async () => {
+    await handleAnalyze();
+    handleGenerateReport();
+  }, [handleAnalyze, handleGenerateReport]);
 
   const evidenceCount = nodes.filter((n) => n.type === 'evidenceNode').length;
 
@@ -447,91 +489,102 @@ function EvidenceCanvasInner() {
     <CanvasContext.Provider value={{ connectedNodeIds }}>
       <div
         ref={wrapperRef}
-        style={{ width: '100%', height: '100%', position: 'relative' }}
+        style={{ width: '100%', height: '100%', display: 'flex' }}
         {...dropHandlers}
       >
-        {/* Canvas recluster class */}
-        <div
-          className={isReclustering ? 'is-reclustering' : ''}
-          style={{ width: '100%', height: '100%' }}
-        >
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={handleNodesChange}
-            onEdgesChange={onEdgesChange}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            fitView
-            fitViewOptions={{ padding: 0.12 }}
-            panOnDrag
-            zoomOnScroll
-            selectionOnDrag={false}
-            minZoom={0.15}
-            maxZoom={2}
-            style={{ background: 'var(--bg)' }}
-            proOptions={{ hideAttribution: true }}
+        {/* Canvas area */}
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          {/* Canvas recluster class */}
+          <div
+            className={isReclustering ? 'is-reclustering' : ''}
+            style={{ width: '100%', height: '100%' }}
           >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={20}
-              size={1.5}
-              color="#E8E6E0"
-            />
-
-            {/* Toolbar */}
-            <CanvasToolbar
-              evidenceCount={evidenceCount}
-              isAnalyzing={isAnalyzing}
-              analysisDone={analysisDone}
-              isGenerating={isGenerating}
-              caseId={caseId}
-              onAddFiles={handleAddFilesFromButton}
-              onAnalyze={handleAnalyze}
-              onGenerateReport={handleViewReport}
-            />
-
-            {/* Zoom Controls */}
-            <ZoomControls />
-          </ReactFlow>
-        </div>
-
-        {/* Drag-over overlay */}
-        {isDragOver && (
-          <div className="canvas-dragover-overlay">
-            <div
-              style={{
-                position: 'absolute',
-                left: dropLabelPos.x - 80,
-                top: dropLabelPos.y - 20,
-                fontFamily: 'DM Sans, sans-serif',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: 'var(--accent)',
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                padding: '6px 10px',
-                pointerEvents: 'none',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={onEdgesChange}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              fitView
+              fitViewOptions={{ padding: 0.12 }}
+              panOnDrag
+              zoomOnScroll
+              selectionOnDrag={false}
+              minZoom={0.15}
+              maxZoom={2}
+              style={{ background: 'var(--bg)' }}
+              proOptions={{ hideAttribution: true }}
             >
-              <span>📎</span>
-              Drop to add evidence
-            </div>
+              <Background
+                variant={BackgroundVariant.Dots}
+                gap={20}
+                size={1.5}
+                color="#E8E6E0"
+              />
+
+              {/* Toolbar */}
+              <CanvasToolbar
+                evidenceCount={evidenceCount}
+                isAnalyzing={isAnalyzing}
+                isGenerating={isGenerating}
+                caseId={caseId}
+                onAddFiles={handleAddFilesFromButton}
+                onGenerateReport={handleAnalyzeAndGenerate}
+              />
+
+              {/* Zoom Controls */}
+              <ZoomControls />
+            </ReactFlow>
           </div>
-        )}
 
-        {/* Analyze wave */}
-        {showAnalyzeWave && <div className="canvas-analyze-wave" />}
+          {/* Drag-over overlay */}
+          {isDragOver && (
+            <div className="canvas-dragover-overlay">
+              <div
+                style={{
+                  position: 'absolute',
+                  left: dropLabelPos.x - 80,
+                  top: dropLabelPos.y - 20,
+                  fontFamily: 'DM Sans, sans-serif',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: 'var(--accent)',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  padding: '6px 10px',
+                  pointerEvents: 'none',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>📎</span>
+                Drop to add evidence
+              </div>
+            </div>
+          )}
 
-        {/* Agent Orb — bottom-left floating voice widget */}
-        <div style={{ position: 'absolute', bottom: '24px', left: '20px', zIndex: 10, width: '80px' }}>
-          <AgentOrb />
+          {/* Analyze wave */}
+          {showAnalyzeWave && <div className="canvas-analyze-wave" />}
+
+          {/* Agent Orb — bottom-left floating voice widget */}
+          <div style={{ position: 'absolute', bottom: '24px', left: '20px', zIndex: 10, width: '80px' }}>
+            <AgentOrb />
+          </div>
         </div>
+
+        {/* Report progress sidebar */}
+        {reportSidebarOpen && (
+          <ReportProgressSidebar
+            sections={reportSections}
+            isGenerating={isGenerating}
+            done={reportDone}
+            caseId={caseId}
+          />
+        )}
       </div>
     </CanvasContext.Provider>
   );
