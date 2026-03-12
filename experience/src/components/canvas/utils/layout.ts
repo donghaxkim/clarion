@@ -123,7 +123,7 @@ export function computeClusterLayout(
       type: 'clusterLabel',
       x: labelX,
       y: labelY,
-      data: { label: formatTypeName(type) },
+      data: { label: formatTypeName(type), childIds: groupNodes.map((n) => n.id) },
     });
   });
 

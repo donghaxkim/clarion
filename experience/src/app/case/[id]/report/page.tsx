@@ -9,11 +9,10 @@ import { ReportBlock } from '@/components/report/ReportBlock';
 import { SectionEditor } from '@/components/report/SectionEditor';
 import { EntityChip } from '@/components/analysis/EntityChip';
 import { EntityPanel } from '@/components/entity/EntityPanel';
-import { EvidenceTypeBadge, getEvidenceColor } from '@/components/ui/Badge';
-import { ProgressBar } from '@/components/ui/ProgressBar';
+import { getEvidenceColor } from '@/components/ui/Badge';
 
 import { ReportSection, Entity, ParsedEvidence } from '@/lib/types';
-import { streamReport, getCase } from '@/lib/api';
+import { getCase } from '@/lib/api';
 import { MOCK_FULL_CASE, MOCK_REPORT_SECTIONS } from '@/lib/mock-data';
 
 interface SectionState {
@@ -28,8 +27,7 @@ export default function ReportPage() {
   const caseId = params.id as string;
 
   const [sections, setSections] = useState<SectionState[]>([]);
-  const [progress, setProgress] = useState<number | undefined>(undefined);
-  const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [evidence, setEvidence] = useState<ParsedEvidence[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [contradictionCount, setContradictionCount] = useState(0);
@@ -37,9 +35,8 @@ export default function ReportPage() {
   const [editingSection, setEditingSection] = useState<ReportSection | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const cleanupRef = useRef<(() => void) | null>(null);
 
-  // Load sidebar data
+  // Load complete case data including already-generated report sections
   useEffect(() => {
     async function loadCase() {
       try {
@@ -48,69 +45,39 @@ export default function ReportPage() {
         setEntities(c.entities);
         setContradictionCount(c.contradictions.length);
         setMissingCount(c.missing_info.length);
+
+        const reportSections = c.report_sections?.length
+          ? c.report_sections
+          : MOCK_REPORT_SECTIONS;
+
+        setSections(
+          reportSections.map((s) => ({
+            section: s,
+            text: s.text || '',
+            streaming: false,
+            complete: true,
+          }))
+        );
       } catch {
         const c = MOCK_FULL_CASE;
         setEvidence(c.evidence);
         setEntities(c.entities);
         setContradictionCount(c.contradictions.length);
         setMissingCount(c.missing_info.length);
+
+        setSections(
+          MOCK_REPORT_SECTIONS.map((s) => ({
+            section: s,
+            text: s.text || '',
+            streaming: false,
+            complete: true,
+          }))
+        );
+      } finally {
+        setLoading(false);
       }
     }
     loadCase();
-  }, [caseId]);
-
-  // Start streaming
-  useEffect(() => {
-    const cleanup = streamReport(
-      caseId,
-      (event) => {
-        if (event.event === 'section_start') {
-          setSections((prev) => [
-            ...prev,
-            { section: event.section, text: '', streaming: true, complete: false },
-          ]);
-        } else if (event.event === 'section_delta') {
-          setSections((prev) =>
-            prev.map((s) =>
-              s.section.id === event.section_id
-                ? { ...s, text: s.text + event.delta_text, streaming: true }
-                : s
-            )
-          );
-          // Auto-scroll
-          setTimeout(() => {
-            scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-          }, 50);
-        } else if (event.event === 'section_complete') {
-          setSections((prev) =>
-            prev.map((s) =>
-              s.section.id === event.section_id
-                ? { ...s, streaming: false, complete: true }
-                : s
-            )
-          );
-        } else if (event.event === 'status') {
-          setProgress(event.progress);
-        } else if (event.event === 'done') {
-          setDone(true);
-          setProgress(100);
-        }
-      },
-      () => {
-        // On error, load mock sections
-        const mockStates: SectionState[] = MOCK_REPORT_SECTIONS.map((s) => ({
-          section: s,
-          text: s.text || '',
-          streaming: false,
-          complete: true,
-        }));
-        setSections(mockStates);
-        setDone(true);
-        setProgress(100);
-      }
-    );
-    cleanupRef.current = cleanup;
-    return () => cleanup();
   }, [caseId]);
 
   function handleSectionUpdated(sectionId: string) {
@@ -145,20 +112,16 @@ export default function ReportPage() {
           / report
         </span>
         <div style={{ flex: 1 }} />
-        {!done && (
+        {loading ? (
           <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-            Generating...
+            Loading...
           </span>
-        )}
-        {done && (
+        ) : (
           <span style={{ fontSize: '12px', color: 'var(--severity-low)' }}>
             Complete
           </span>
         )}
       </header>
-
-      {/* Progress */}
-      {!done && <ProgressBar progress={progress} />}
 
       {/* Three-column layout */}
       <div style={{ flex: 1, display: 'flex', maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
@@ -285,20 +248,20 @@ export default function ReportPage() {
                 <ReportBlock
                   section={s.section}
                   streamingText={s.text}
-                  isStreaming={s.streaming}
-                  onEdit={done ? (section) => setEditingSection(section) : undefined}
+                  isStreaming={false}
+                  onEdit={(section) => setEditingSection(section)}
                 />
               </motion.div>
             ))}
           </AnimatePresence>
 
-          {!done && sections.length === 0 && (
+          {loading && sections.length === 0 && (
             <p style={{ color: 'var(--text-tertiary)', fontSize: '13px', fontStyle: 'italic' }}>
-              Generating your report...
+              Loading report...
             </p>
           )}
 
-          {done && <div style={{ height: '80px' }} />}
+          {!loading && <div style={{ height: '80px' }} />}
         </main>
 
         {/* Right: empty gutter (for pencil icons) */}

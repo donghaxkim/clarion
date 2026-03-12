@@ -25,12 +25,6 @@ import {
   EdgeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import dynamic from 'next/dynamic';
-
-const AgentOrb = dynamic(
-  () => import('@/components/agent/AgentOrb').then((m) => m.AgentOrb),
-  { ssr: false, loading: () => null }
-);
 
 import { EvidenceNode, EvidenceNodeData } from './nodes/EvidenceNode';
 import { ClusterLabel } from './nodes/ClusterLabel';
@@ -41,7 +35,7 @@ import { CorroborationThread } from './edges/CorroborationThread';
 import { TimelineThread } from './edges/TimelineThread';
 import { CanvasToolbar } from './controls/CanvasToolbar';
 import { ZoomControls } from './controls/ZoomControls';
-import { useAutoCluster } from './hooks/useAutoCluster';
+import { useAutoCluster, getClusterForNode } from './hooks/useAutoCluster';
 import { useFileDrop } from './hooks/useFileDrop';
 import { useZoomVisibility } from './hooks/useZoomVisibility';
 import { buildEdgesFromAnalysis, staggerEdgeReveal } from './hooks/useEdgeBuilder';
@@ -50,6 +44,7 @@ import { computeClusterLayout } from './utils/layout';
 import { ParsedEvidence, AnalysisResponse } from '@/lib/types';
 import { createCase, uploadFiles, analyzeCase, generateReport, streamReport } from '@/lib/api';
 import { ReportProgressSidebar, SectionState } from '@/components/report/ReportProgressSidebar';
+import { AgentOrb } from '@/components/agent/AgentOrb';
 import {
   MOCK_CASE_ID,
   MOCK_EVIDENCE,
@@ -137,7 +132,6 @@ function buildInitialMockNodes(): Node[] {
       type: 'clusterLabel',
       position: { x: lp.x, y: lp.y },
       data: lp.data ?? {},
-      draggable: false,
       selectable: false,
     }));
 
@@ -164,6 +158,11 @@ function EvidenceCanvasInner() {
 
   const initialNodes = useMemo(() => buildInitialMockNodes(), []);
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+
+  // Keep a ref to nodes so handleNodesChange can read pre-change positions
+  // without being recreated on every node update
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
 
   const initialEdges = useMemo(() => buildInitialMockEdges(initialNodes), [initialNodes]);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -220,22 +219,123 @@ function EvidenceCanvasInner() {
     );
   }, [connectedNodeIds, setNodes]);
 
-  // ── Handle node drag to mark as pinned ──────────────────────────────────
+  // ── Snap-back animation state ───────────────────────────────────────────
+  const [isSnappingBack, setIsSnappingBack] = useState(false);
+
+  // ── Handle node drag: group-drag for clusters + snap-back for cards ────
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
-      onNodesChange(changes);
-      // Mark dragged nodes as pinned
-      changes.forEach((change) => {
-        if (change.type === 'position' && change.dragging) {
-          setNodes((prev) =>
-            prev.map((n) =>
-              n.id === change.id
-                ? { ...n, data: { ...n.data, pinned: true } }
-                : n
-            )
-          );
+      // Read pre-change positions from ref (before onNodesChange mutates state)
+      const preNodes = nodesRef.current;
+      const extraChanges: NodeChange[] = [];
+
+      for (const change of changes) {
+        if (change.type !== 'position' || !change.dragging || !change.position) continue;
+
+        const node = preNodes.find((n) => n.id === change.id);
+        if (!node || node.type !== 'clusterLabel') continue;
+
+        const childIds = (node.data as Record<string, unknown>).childIds as string[] | undefined;
+        if (!childIds?.length) continue;
+
+        const dx = change.position.x - node.position.x;
+        const dy = change.position.y - node.position.y;
+        if (dx === 0 && dy === 0) continue;
+
+        // Inject position changes for every child so they move with the header
+        for (const childId of childIds) {
+          const child = preNodes.find((n) => n.id === childId);
+          if (child) {
+            extraChanges.push({
+              type: 'position',
+              id: childId,
+              position: { x: child.position.x + dx, y: child.position.y + dy },
+            } as NodeChange);
+          }
         }
-      });
+      }
+
+      // Apply original + child-movement changes together
+      onNodesChange([...changes, ...extraChanges]);
+
+      // Post-change bookkeeping
+      const pinIds: string[] = [];
+      const snapBacks: { id: string; pos: { x: number; y: number } }[] = [];
+      const validUpdates: { id: string; pos: { x: number; y: number } }[] = [];
+
+      for (const change of changes) {
+        if (change.type !== 'position') continue;
+
+        const preNode = preNodes.find((n) => n.id === change.id);
+        if (!preNode) continue;
+
+        // Pin evidence nodes when dragged
+        if (change.dragging && preNode.type === 'evidenceNode') {
+          pinIds.push(change.id);
+        }
+
+        // On drag end: snap-back check
+        if (!change.dragging && change.position && preNode.type === 'evidenceNode') {
+          const cluster = getClusterForNode(change.id, preNodes);
+          if (!cluster) continue;
+
+          const childIds = (cluster.data as Record<string, unknown>).childIds as string[];
+          const siblings = preNodes.filter(
+            (n) => childIds.includes(n.id) && n.id !== change.id
+          );
+          if (siblings.length === 0) continue;
+
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const s of siblings) {
+            minX = Math.min(minX, s.position.x);
+            minY = Math.min(minY, s.position.y);
+            maxX = Math.max(maxX, s.position.x);
+            maxY = Math.max(maxY, s.position.y);
+          }
+
+          const margin = 150;
+          const { x, y } = change.position;
+
+          if (x < minX - margin || x > maxX + margin || y < minY - margin || y > maxY + margin) {
+            // Snap back — use lastValidPosition, or the position it had before this drag
+            const lastValid = (preNode.data as Record<string, unknown>).lastValidPosition as
+              | { x: number; y: number }
+              | undefined;
+            snapBacks.push({ id: change.id, pos: lastValid ?? preNode.position });
+          } else {
+            validUpdates.push({ id: change.id, pos: change.position });
+          }
+        }
+      }
+
+      // Apply pins, snap-backs, and valid-position updates in one batch
+      if (pinIds.length > 0 || snapBacks.length > 0 || validUpdates.length > 0) {
+        if (snapBacks.length > 0) {
+          setIsSnappingBack(true);
+          setTimeout(() => setIsSnappingBack(false), 400);
+        }
+
+        const snapMap = new Map(snapBacks.map((s) => [s.id, s.pos]));
+        const validMap = new Map(validUpdates.map((v) => [v.id, v.pos]));
+        const pinSet = new Set(pinIds);
+
+        setNodes((prev) =>
+          prev.map((n) => {
+            const snap = snapMap.get(n.id);
+            if (snap) return { ...n, position: snap };
+
+            let updated = n;
+            if (pinSet.has(n.id) && !(n.data as Record<string, unknown>).pinned) {
+              updated = { ...updated, data: { ...updated.data, pinned: true } };
+            }
+            const vPos = validMap.get(n.id);
+            if (vPos) {
+              updated = { ...updated, data: { ...updated.data, lastValidPosition: vPos } };
+            }
+            return updated;
+          })
+        );
+      }
     },
     [onNodesChange, setNodes]
   );
@@ -483,6 +583,15 @@ function EvidenceCanvasInner() {
     handleGenerateReport();
   }, [handleAnalyze, handleGenerateReport]);
 
+  // ── Reset layout ─────────────────────────────────────────────────────
+  const handleResetLayout = useCallback(() => {
+    const resetNodes = buildInitialMockNodes();
+    setNodes(resetNodes);
+    const resetEdges = buildInitialMockEdges(resetNodes);
+    setEdges(resetEdges);
+    setTimeout(() => fitView({ duration: 600, padding: 0.12 }), 50);
+  }, [setNodes, setEdges, fitView]);
+
   const evidenceCount = nodes.filter((n) => n.type === 'evidenceNode').length;
 
   return (
@@ -496,7 +605,10 @@ function EvidenceCanvasInner() {
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
           {/* Canvas recluster class */}
           <div
-            className={isReclustering ? 'is-reclustering' : ''}
+            className={[
+              isReclustering ? 'is-reclustering' : '',
+              isSnappingBack ? 'is-snapping-back' : '',
+            ].filter(Boolean).join(' ') || undefined}
             style={{ width: '100%', height: '100%' }}
           >
             <ReactFlow
@@ -534,7 +646,7 @@ function EvidenceCanvasInner() {
               />
 
               {/* Zoom Controls */}
-              <ZoomControls />
+              <ZoomControls onReset={handleResetLayout} />
             </ReactFlow>
           </div>
 
@@ -570,8 +682,8 @@ function EvidenceCanvasInner() {
           {/* Analyze wave */}
           {showAnalyzeWave && <div className="canvas-analyze-wave" />}
 
-          {/* Agent Orb — bottom-left floating voice widget */}
-          <div style={{ position: 'absolute', bottom: '24px', left: '20px', zIndex: 10, width: '80px' }}>
+          {/* Agent Orb — positioned within canvas area so it shifts with sidebar */}
+          <div style={{ position: 'absolute', bottom: '24px', right: '24px', zIndex: 50, width: '80px' }}>
             <AgentOrb />
           </div>
         </div>

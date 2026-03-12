@@ -8,6 +8,7 @@ import {
   getBezierPath,
   Edge,
 } from '@xyflow/react';
+import { AlertTriangle } from 'lucide-react';
 
 export interface ContradictionThreadData {
   severity: 'high' | 'medium' | 'low';
@@ -52,11 +53,6 @@ function ContradictionThreadComponent({
   const color = SEVERITY_COLORS[severity];
   const isActive = selected || hovered;
 
-  // Short description label (first 5 words or less)
-  const shortDesc = data?.description
-    ? data.description.split(' ').slice(0, 5).join(' ') + (data.description.split(' ').length > 5 ? '…' : '')
-    : 'Contradiction';
-
   return (
     <>
       {/* Glow layer */}
@@ -72,7 +68,7 @@ function ContradictionThreadComponent({
         }}
       />
 
-      {/* Main edge with traveling dots */}
+      {/* Main edge */}
       <path
         id={id}
         d={edgePath}
@@ -82,7 +78,6 @@ function ContradictionThreadComponent({
         strokeDasharray="6 6"
         opacity={isActive ? 0.9 : 0.65}
         style={{
-          animation: 'travelDots 0.8s linear infinite',
           transition: 'opacity 0.2s, stroke-width 0.2s',
           cursor: 'pointer',
           filter: isActive ? `drop-shadow(0 0 3px ${color}40)` : undefined,
@@ -101,11 +96,11 @@ function ContradictionThreadComponent({
             fontFamily: 'DM Sans, sans-serif',
             fontSize: '10px',
             fontWeight: 500,
-            color,
+            color: 'var(--text-tertiary)',
             background: 'var(--bg-surface)',
             padding: '2px 6px',
             borderRadius: '4px',
-            border: `1px solid ${color}40`,
+            border: '1px solid var(--border)',
             display: 'flex',
             alignItems: 'center',
             gap: '3px',
@@ -113,12 +108,16 @@ function ContradictionThreadComponent({
             boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
           }}
         >
-          <span>⚡</span>
-          {shortDesc}
+          <AlertTriangle size={10} strokeWidth={2} style={{ color: 'var(--text-tertiary)' }} />
+          {data?.description
+            ? data.description.split(' ').slice(0, 5).join(' ') + (data.description.split(' ').length > 5 ? '...' : '')
+            : 'Contradiction'}
         </div>
+      </EdgeLabelRenderer>
 
-        {/* Hover tooltip */}
-        {isActive && data?.factA && data?.factB && (
+      {/* Hover tooltip */}
+      {isActive && data?.factA && data?.factB && (
+        <EdgeLabelRenderer>
           <div
             style={{
               position: 'absolute',
@@ -151,8 +150,8 @@ function ContradictionThreadComponent({
               </span>
             </div>
           </div>
-        )}
-      </EdgeLabelRenderer>
+        </EdgeLabelRenderer>
+      )}
     </>
   );
 }

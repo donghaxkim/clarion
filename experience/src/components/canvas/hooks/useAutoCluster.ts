@@ -12,6 +12,16 @@ interface UseAutoClusterOptions {
   onClusterEnd?: () => void;
 }
 
+/** Find the cluster label node that owns a given evidence node */
+export function getClusterForNode(nodeId: string, allNodes: Node[]): Node | undefined {
+  return allNodes.find(
+    (n) =>
+      n.type === 'clusterLabel' &&
+      Array.isArray((n.data as Record<string, unknown>).childIds) &&
+      ((n.data as Record<string, unknown>).childIds as string[]).includes(nodeId)
+  );
+}
+
 export function useAutoCluster(options: UseAutoClusterOptions = {}) {
   const { setNodes, getNodes } = useReactFlow();
   const isClusteringRef = useRef(false);
@@ -52,7 +62,6 @@ export function useAutoCluster(options: UseAutoClusterOptions = {}) {
           type: 'clusterLabel',
           position: { x: lp.x, y: lp.y },
           data: lp.data ?? {},
-          draggable: false,
           selectable: false,
         }));
 
