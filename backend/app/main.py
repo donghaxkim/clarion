@@ -30,6 +30,7 @@ from app.services.intelligence.citations import build_citation_index, CitationIn
 from app.services.intelligence.contradictions import (
     detect_contradictions, summarize_contradictions,
 )
+from app.routers.voice import router as voice_router
 
 # ──────────────────────────────────────────────
 #  APP SETUP
@@ -48,6 +49,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(voice_router)
 
 # In-memory case storage (swap for a database in production)
 # For hackathon, this is fine — everything lives in memory
