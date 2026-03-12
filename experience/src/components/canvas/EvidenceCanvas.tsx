@@ -49,7 +49,8 @@ import { buildEdgesFromAnalysis, staggerEdgeReveal } from './hooks/useEdgeBuilde
 import { computeClusterLayout } from './utils/layout';
 
 import { ParsedEvidence, AnalysisResponse } from '@/lib/types';
-import { createCase, uploadFiles, analyzeCase } from '@/lib/api';
+import { createCase, uploadFiles, analyzeCase, generateReport, streamReport } from '@/lib/api';
+import { ReportProgressSidebar, SectionState } from '@/components/report/ReportProgressSidebar';
 import {
   MOCK_CASE_ID,
   MOCK_EVIDENCE,
@@ -175,6 +176,12 @@ function EvidenceCanvasInner() {
   const [analysisDone, setAnalysisDone] = useState(true); // true because mock data shows analysis done
   const [isReclustering, setIsReclustering] = useState(false);
   const [showAnalyzeWave, setShowAnalyzeWave] = useState(false);
+
+  // Report sidebar state
+  const [reportSidebarOpen, setReportSidebarOpen] = useState(false);
+  const [reportSections, setReportSections] = useState<SectionState[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [reportDone, setReportDone] = useState(false);
 
   // Fit view after mount
   useEffect(() => {
@@ -477,7 +484,7 @@ function EvidenceCanvasInner() {
               evidenceCount={evidenceCount}
               isAnalyzing={isAnalyzing}
               analysisDone={analysisDone}
-              isGenerating={false}
+              isGenerating={isGenerating}
               caseId={caseId}
               onAddFiles={handleAddFilesFromButton}
               onAnalyze={handleAnalyze}
