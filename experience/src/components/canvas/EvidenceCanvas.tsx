@@ -477,10 +477,11 @@ function EvidenceCanvasInner() {
               evidenceCount={evidenceCount}
               isAnalyzing={isAnalyzing}
               analysisDone={analysisDone}
+              isGenerating={false}
               caseId={caseId}
               onAddFiles={handleAddFilesFromButton}
               onAnalyze={handleAnalyze}
-              onViewReport={handleViewReport}
+              onGenerateReport={handleViewReport}
             />
 
             {/* Zoom Controls */}
