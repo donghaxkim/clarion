@@ -103,11 +103,22 @@ def gcs_uri_to_signed_url(
 
         client = storage.Client()
         blob = client.bucket(bucket).blob(key)
+        signing_kwargs = _get_signed_url_generation_kwargs(getattr(client, "_credentials", None))
         return blob.generate_signed_url(
             version="v4",
             expiration=timedelta(seconds=expiration_seconds),
             method="GET",
+            **signing_kwargs,
         )
+    except AttributeError as exc:
+        if "private key" in str(exc):
+            raise RuntimeError(
+                "Failed to generate a signed URL because the active credentials cannot sign "
+                "Cloud Storage URLs. Use service account impersonation "
+                "(`gcloud auth application-default login --impersonate-service-account=...`) "
+                "or set GOOGLE_APPLICATION_CREDENTIALS to a service account key."
+            ) from exc
+        raise RuntimeError(f"Failed to generate a signed URL for {gcs_uri}") from exc
     except Exception as exc:
         raise RuntimeError(f"Failed to generate a signed URL for {gcs_uri}") from exc
 
@@ -126,6 +137,34 @@ def build_local_artifact_url(gcs_uri: str, *, base_url: str) -> str:
     return f"{base_url.rstrip('/')}/generate/artifacts/{quote(key, safe='/')}"
 
 
+def _get_signed_url_generation_kwargs(credentials: object | None) -> dict[str, str]:
+    if credentials is None:
+        return {}
+
+    try:
+        from google.auth import credentials as google_auth_credentials  # type: ignore
+        from google.auth.transport.requests import Request  # type: ignore
+    except Exception:
+        return {}
+
+    if isinstance(credentials, google_auth_credentials.Signing):
+        return {}
+
+    access_token = getattr(credentials, "token", None)
+    if access_token is None and hasattr(credentials, "refresh"):
+        credentials.refresh(Request())
+        access_token = getattr(credentials, "token", None)
+
+    service_account_email = getattr(credentials, "service_account_email", None)
+    if service_account_email and access_token:
+        return {
+            "service_account_email": service_account_email,
+            "access_token": access_token,
+        }
+
+    return {}
+
+
 def materialize_browser_uri(
     uri: str | None,
     *,
@@ -139,4 +178,4 @@ def materialize_browser_uri(
     except Exception:
         if base_url and GCS_ALLOW_LOCAL_FALLBACK and local_artifact_exists(uri):
             return build_local_artifact_url(uri, base_url=base_url)
-        raise
+        return gcs_uri_to_https(uri)

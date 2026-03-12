@@ -19,8 +19,33 @@ export type ReportGenerationJobStatus =
   | "generating_media"
   | "completed"
   | "failed";
+export type ReportGenerationPhase =
+  | "queued"
+  | "intake"
+  | "timeline_planning"
+  | "grounding_review"
+  | "parallel_planning"
+  | "composition"
+  | "media_generation"
+  | "finalizing";
+export type ReportGenerationActivityStatus = "running" | "completed" | "failed";
 export type MediaAssetKind = "image" | "video";
 export type ReportPanelMode = "citations" | "edit";
+export type ReportWorkflowNodeKind = "agent" | "worker";
+export type ReportWorkflowLane =
+  | "chronology"
+  | "review"
+  | "planning"
+  | "composition"
+  | "media"
+  | "finalize";
+export type ReportWorkflowEdgeRelation = "sequence" | "loop" | "parallel";
+export type ReportWorkflowNodeStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
 
 export interface SourceSpan {
   segment_id?: string | null;
@@ -117,6 +142,49 @@ export interface ReportArtifactRefs {
   manifest_gcs_uri?: string | null;
 }
 
+export interface ReportGenerationActivity {
+  phase: ReportGenerationPhase;
+  status: ReportGenerationActivityStatus;
+  label: string;
+  detail?: string | null;
+  node_id?: string | null;
+  active_node_ids: string[];
+  attempt?: number | null;
+  max_attempts?: number | null;
+  updated_at: string;
+}
+
+export interface ReportWorkflowNode {
+  node_id: string;
+  label: string;
+  kind: ReportWorkflowNodeKind;
+  lane: ReportWorkflowLane;
+  optional: boolean;
+}
+
+export interface ReportWorkflowEdge {
+  source_node_id: string;
+  target_node_id: string;
+  relation: ReportWorkflowEdgeRelation;
+}
+
+export interface ReportWorkflowNodeState {
+  node_id: string;
+  status: ReportWorkflowNodeStatus;
+  detail?: string | null;
+  attempt?: number | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ReportWorkflowState {
+  version: string;
+  nodes: ReportWorkflowNode[];
+  edges: ReportWorkflowEdge[];
+  node_states: ReportWorkflowNodeState[];
+  active_node_ids: string[];
+}
+
 export interface ReportDocument {
   report_id: string;
   status: ReportStatus;
@@ -145,10 +213,12 @@ export interface ReportGenerationJobStatusResponse {
   report_id: string;
   status: ReportGenerationJobStatus;
   progress: number;
-  warnings: string[];
+  warnings: string[]; 
   error?: string | null;
   report?: ReportDocument | null;
   artifacts?: ReportArtifactRefs | null;
+  activity?: ReportGenerationActivity | null;
+  workflow?: ReportWorkflowState | null;
 }
 
 export const reportPanelModes = ["citations", "edit"] as const;

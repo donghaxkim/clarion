@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.agents.reporting.progress import ProgressEventBuffer
 from app.agents.reporting.types import ComposerOutput, ReportGenerationPolicy, TimelinePlan
 from app.agents.reporting.validators import normalize_composer_output, validate_composer_output
 from app.models import CaseEvidenceBundle
@@ -121,3 +122,87 @@ def _coerce_instruction_text(instruction: Any) -> str:
         return str(text)
 
     return str(instruction)
+
+
+def build_progress_callbacks(
+    progress_events: ProgressEventBuffer | None,
+    *,
+    include_tool_detail: bool = False,
+) -> dict[str, Any]:
+    if progress_events is None:
+        return {}
+
+    def before_agent_progress(callback_context: Any) -> Any | None:
+        progress_events.agent_started(getattr(callback_context, "agent_name", ""))
+        return None
+
+    def after_agent_progress(callback_context: Any) -> Any | None:
+        progress_events.agent_completed(getattr(callback_context, "agent_name", ""))
+        return None
+
+    def on_model_error(
+        callback_context: Any,
+        llm_request: Any,
+        error: Exception | None = None,
+        exc: Exception | None = None,
+        **_: Any,
+    ) -> Any | None:
+        del llm_request
+        progress_events.agent_failed(
+            getattr(callback_context, "agent_name", ""),
+            _stringify_error(error or exc),
+        )
+        return None
+
+    callbacks = {
+        "before_agent_callback": before_agent_progress,
+        "after_agent_callback": after_agent_progress,
+        "on_model_error_callback": on_model_error,
+    }
+
+    if include_tool_detail:
+        def before_tool_progress(
+            tool: Any,
+            args: dict[str, Any],
+            tool_context: Any = None,
+            **_: Any,
+        ) -> Any | None:
+            tool_name = getattr(tool, "name", tool.__class__.__name__)
+            progress_events.tool_started(
+                getattr(tool_context, "agent_name", ""),
+                tool_name,
+                args,
+            )
+            return None
+
+        def on_tool_error(
+            tool: Any,
+            args: dict[str, Any],
+            tool_context: Any = None,
+            error: Exception | None = None,
+            exc: Exception | None = None,
+            **_: Any,
+        ) -> Any | None:
+            del args
+            tool_name = getattr(tool, "name", tool.__class__.__name__)
+            progress_events.tool_failed(
+                getattr(tool_context, "agent_name", ""),
+                tool_name,
+                _stringify_error(error or exc),
+            )
+            return None
+
+        callbacks.update(
+            {
+                "before_tool_callback": before_tool_progress,
+                "on_tool_error_callback": on_tool_error,
+            }
+        )
+
+    return callbacks
+
+
+def _stringify_error(error: Exception | None) -> str:
+    if error is None:
+        return "Unknown callback error"
+    return str(error)

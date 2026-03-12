@@ -26,12 +26,15 @@ import type {
   MediaAsset,
   ReportBlock,
   ReportDocument,
+  ReportGenerationActivity,
   ReportGenerationJobStatusResponse,
   ReportStatus,
 } from "@/lib/clarion-types";
 
 const streamEventTypes = [
   "job.started",
+  "job.activity",
+  "report.preview.updated",
   "timeline.ready",
   "block.created",
   "media.started",
@@ -63,6 +66,7 @@ interface ExperienceViewerProps {
   reportId: string;
   jobId?: string;
   error?: string | null;
+  activity?: ReportGenerationActivity | null;
 }
 
 export function JobReportExperienceBoundary({
@@ -87,6 +91,7 @@ export function StandaloneReportExperienceBoundary({
         streamState="closed"
         reportId={initialReport.report_id}
         status={initialReport.status}
+        activity={null}
       />
     </Suspense>
   );
@@ -166,6 +171,7 @@ function LiveJobExperience({
       reportId={job.report_id}
       jobId={job.job_id}
       error={job.error}
+      activity={job.activity ?? null}
     />
   );
 }
@@ -180,6 +186,7 @@ function ExperienceViewer({
   reportId,
   jobId,
   error,
+  activity,
 }: ExperienceViewerProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -215,6 +222,7 @@ function ExperienceViewer({
     status,
     streamState,
     error,
+    activity,
   });
 
   function setViewerState(nextSection: string | null) {
@@ -336,6 +344,7 @@ function ExperienceViewer({
                 jobId={jobId}
                 status={status}
                 streamState={streamState}
+                activity={activity}
               />
             </div>
 
@@ -466,6 +475,7 @@ function StatusCard({
   jobId,
   status,
   streamState,
+  activity,
 }: {
   mode: "job" | "report";
   progress?: number;
@@ -474,6 +484,7 @@ function StatusCard({
   jobId?: string;
   status: string;
   streamState: StreamState;
+  activity?: ReportGenerationActivity | null;
 }) {
   const progressValue =
     typeof progress === "number"
@@ -526,6 +537,20 @@ function StatusCard({
           <dd>{formatStatusLabel(report?.status ?? (status as ReportStatus))}</dd>
         </div>
       </dl>
+      {mode === "job" ? (
+        <div className="mt-5 rounded-[1.35rem] border border-paper/12 bg-paper/6 px-4 py-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-paper/48">
+            Currently Working
+          </p>
+          <p className="mt-3 text-base leading-7 text-paper">
+            {activity?.label ?? "Clarion is preparing the next report step."}
+          </p>
+          <p className="mt-2 text-sm leading-6 text-paper/60">
+            {activity?.detail ??
+              "The live console will surface the active agent as soon as the backend reports it."}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -933,6 +958,7 @@ function getLiveAnnouncement({
   status,
   streamState,
   error,
+  activity,
 }: {
   mode: "job" | "report";
   progress?: number;
@@ -940,6 +966,7 @@ function getLiveAnnouncement({
   status: string;
   streamState: StreamState;
   error?: string | null;
+  activity?: ReportGenerationActivity | null;
 }) {
   if (error) {
     return error;
@@ -956,6 +983,10 @@ function getLiveAnnouncement({
 
   if (streamState === "reconnecting") {
     return `Live stream reconnecting. Latest status ${progressLabel}.`;
+  }
+
+  if (activity?.label) {
+    return `${activity.label}. ${activity.detail ?? `Latest status ${progressLabel}.`}`;
   }
 
   return `Report ${formatStatusLabel(status as ReportStatus)} at ${progressLabel} with ${sectionCount} section(s).`;

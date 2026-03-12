@@ -1,8 +1,23 @@
 from __future__ import annotations
 
+import inspect
+from typing import Awaitable, Callable
+
+from app.agents.reporting.progress import (
+    NODE_CONTEXT_ENRICHMENT,
+    NODE_FINAL_COMPOSER,
+    NODE_GROUNDING_REVIEWER,
+    NODE_MEDIA_PLANNER,
+    NODE_TIMELINE_PLANNER,
+    PipelinePreviewSnapshot,
+    PipelineProgressEvent,
+)
 from app.agents.reporting.types import (
+    ComposerOutput,
     ComposedBlockDraft,
     ContextNote,
+    ContextPlan,
+    MediaPlan,
     MediaRequest,
     PipelineResult,
     ReportGenerationPolicy,
@@ -18,6 +33,8 @@ from app.models import (
     ReportProvenance,
 )
 
+ProgressCallback = Callable[[PipelineProgressEvent], Awaitable[None] | None]
+
 
 class HeuristicReportingPipeline:
     def __init__(self, policy: ReportGenerationPolicy):
@@ -29,16 +46,115 @@ class HeuristicReportingPipeline:
         bundle: CaseEvidenceBundle,
         report_id: str,
         user_id: str,
+        progress_callback: ProgressCallback | None = None,
     ) -> PipelineResult:
         del report_id, user_id
+        preview_snapshot = PipelinePreviewSnapshot()
+
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_started(NODE_TIMELINE_PLANNER),
+        )
         timeline = self._build_timeline(bundle)
+        preview_snapshot.timeline_plan = timeline
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.snapshot_updated(
+                preview_snapshot.copy(),
+                preview_reason="timeline_plan",
+            ),
+        )
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_completed(NODE_TIMELINE_PLANNER),
+        )
+
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_started(
+                NODE_GROUNDING_REVIEWER,
+                detail="Review pass 1 of 3",
+                attempt=1,
+            ),
+        )
         issues = validate_timeline_plan(bundle, timeline)
         if issues:
+            await _emit_progress(
+                progress_callback,
+                PipelineProgressEvent.node_failed(
+                    NODE_GROUNDING_REVIEWER,
+                    detail="; ".join(issues),
+                    attempt=1,
+                ),
+            )
             raise ValueError("; ".join(issues))
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_completed(
+                NODE_GROUNDING_REVIEWER,
+                detail="Review pass 1 of 3",
+                attempt=1,
+            ),
+        )
 
+        if self.policy.enable_public_context:
+            await _emit_progress(
+                progress_callback,
+                PipelineProgressEvent.node_started(NODE_CONTEXT_ENRICHMENT),
+            )
         context_notes = self._build_context_notes(timeline)
+        preview_snapshot.context_plan = ContextPlan(notes=context_notes)
+        if self.policy.enable_public_context:
+            await _emit_progress(
+                progress_callback,
+                PipelineProgressEvent.snapshot_updated(
+                    preview_snapshot.copy(),
+                    preview_reason="context_plan",
+                ),
+            )
+            await _emit_progress(
+                progress_callback,
+                PipelineProgressEvent.node_completed(NODE_CONTEXT_ENRICHMENT),
+            )
+
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_started(NODE_MEDIA_PLANNER),
+        )
         blocks = self._build_blocks(timeline, context_notes)
         image_requests, reconstruction_requests = self._build_media_plans(blocks, timeline)
+        preview_snapshot.media_plan = MediaPlan(
+            image_requests=image_requests,
+            reconstruction_requests=reconstruction_requests,
+        )
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.snapshot_updated(
+                preview_snapshot.copy(),
+                preview_reason="media_plan",
+            ),
+        )
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_completed(NODE_MEDIA_PLANNER),
+        )
+
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_started(NODE_FINAL_COMPOSER),
+        )
+        preview_snapshot.composer_output = ComposerOutput(blocks=blocks)
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.snapshot_updated(
+                preview_snapshot.copy(),
+                preview_reason="composer_output",
+            ),
+        )
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.node_completed(NODE_FINAL_COMPOSER),
+        )
         return PipelineResult(
             blocks=blocks,
             image_requests=image_requests,
@@ -242,3 +358,14 @@ def _merge_citations(citation_groups: list[list[Citation]]) -> list[Citation]:
             key = (citation.source_id, citation.provenance.value)
             deduped[key] = citation
     return list(deduped.values())
+
+
+async def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    event: PipelineProgressEvent,
+) -> None:
+    if progress_callback is None:
+        return
+    result = progress_callback(event)
+    if inspect.isawaitable(result):
+        await result

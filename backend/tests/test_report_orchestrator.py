@@ -1,7 +1,24 @@
 import asyncio
 import json
 
-from app.agents.reporting.types import ComposedBlockDraft, MediaRequest, PipelineResult
+from app.agents.reporting.progress import (
+    NODE_FINAL_COMPOSER,
+    NODE_GROUNDING_REVIEWER,
+    NODE_MEDIA_PLANNER,
+    NODE_TIMELINE_PLANNER,
+    PipelinePreviewSnapshot,
+    PipelineProgressEvent,
+)
+from app.agents.reporting.types import (
+    ComposerOutput,
+    ComposedBlockDraft,
+    ContextPlan,
+    MediaPlan,
+    MediaRequest,
+    PipelineResult,
+    TimelineEvent,
+    TimelinePlan,
+)
 from app.models import (
     CaseEvidenceBundle,
     Citation,
@@ -22,32 +39,23 @@ from app.services.generation.orchestrator import ReportGenerationOrchestrator
 
 
 class _FakePipeline:
-    async def run(self, *, bundle, report_id, user_id):
+    async def run(self, *, bundle, report_id, user_id, progress_callback=None):
         del bundle, report_id, user_id
         citation = Citation(source_id="ev-1", provenance=ReportProvenance.evidence)
-        return PipelineResult(
-            blocks=[
-                ComposedBlockDraft(
-                    id="timeline-overview",
-                    type=ReportBlockType.timeline,
-                    title="Overview",
-                    content="Approach\nImpact",
-                    sort_key="0000",
-                    provenance=ReportProvenance.evidence,
-                    confidence_score=0.9,
-                    citations=[citation],
-                ),
-                ComposedBlockDraft(
-                    id="event-impact",
-                    type=ReportBlockType.text,
+        timeline = TimelinePlan(
+            timeline_events=[
+                TimelineEvent(
+                    event_id="impact",
                     title="Impact",
-                    content="The collision occurs.",
+                    narrative="Vehicles converge at the intersection.",
                     sort_key="0001",
-                    provenance=ReportProvenance.evidence,
-                    confidence_score=0.8,
+                    evidence_refs=["ev-1"],
                     citations=[citation],
-                ),
-            ],
+                    confidence_score=0.8,
+                )
+            ]
+        )
+        media_plan = MediaPlan(
             image_requests=[
                 MediaRequest(
                     block_id="event-impact-image",
@@ -74,6 +82,89 @@ class _FakePipeline:
                     evidence_refs=["ev-1"],
                 )
             ],
+        )
+        composer = ComposerOutput(
+            blocks=[
+                ComposedBlockDraft(
+                    id="timeline-overview",
+                    type=ReportBlockType.timeline,
+                    title="Overview",
+                    content="Approach\nImpact",
+                    sort_key="0000",
+                    provenance=ReportProvenance.evidence,
+                    confidence_score=0.9,
+                    citations=[citation],
+                ),
+                ComposedBlockDraft(
+                    id="event-impact",
+                    type=ReportBlockType.text,
+                    title="Impact",
+                    content="The collision occurs.",
+                    sort_key="0001",
+                    provenance=ReportProvenance.evidence,
+                    confidence_score=0.8,
+                    citations=[citation],
+                ),
+            ]
+        )
+        if progress_callback is not None:
+            await progress_callback(PipelineProgressEvent.node_started(NODE_TIMELINE_PLANNER))
+            await progress_callback(
+                PipelineProgressEvent.snapshot_updated(
+                    PipelinePreviewSnapshot(timeline_plan=timeline),
+                    preview_reason="timeline_plan",
+                )
+            )
+            await progress_callback(
+                PipelineProgressEvent.node_completed(NODE_TIMELINE_PLANNER)
+            )
+            await progress_callback(
+                PipelineProgressEvent.node_started(
+                    NODE_GROUNDING_REVIEWER,
+                    detail="Review pass 1 of 3",
+                    attempt=1,
+                )
+            )
+            await progress_callback(
+                PipelineProgressEvent.node_completed(
+                    NODE_GROUNDING_REVIEWER,
+                    detail="Review pass 1 of 3",
+                    attempt=1,
+                )
+            )
+            await progress_callback(PipelineProgressEvent.node_started(NODE_MEDIA_PLANNER))
+            await progress_callback(
+                PipelineProgressEvent.snapshot_updated(
+                    PipelinePreviewSnapshot(
+                        timeline_plan=timeline,
+                        context_plan=ContextPlan(),
+                        media_plan=media_plan,
+                    ),
+                    preview_reason="media_plan",
+                )
+            )
+            await progress_callback(
+                PipelineProgressEvent.node_completed(NODE_MEDIA_PLANNER)
+            )
+            await progress_callback(PipelineProgressEvent.node_started(NODE_FINAL_COMPOSER))
+            await progress_callback(
+                PipelineProgressEvent.snapshot_updated(
+                    PipelinePreviewSnapshot(
+                        timeline_plan=timeline,
+                        context_plan=ContextPlan(),
+                        media_plan=media_plan,
+                        composer_output=composer,
+                    ),
+                    preview_reason="composer_output",
+                )
+            )
+            await progress_callback(
+                PipelineProgressEvent.node_completed(NODE_FINAL_COMPOSER)
+            )
+        return PipelineResult(
+            blocks=composer.blocks,
+            image_requests=media_plan.image_requests,
+            reconstruction_requests=media_plan.reconstruction_requests,
         )
 
 
@@ -149,6 +240,11 @@ def test_orchestrator_runs_full_job_and_persists_report_manifest(tmp_path):
     assert final.report is not None
     assert final.report.status == ReportStatus.completed
     assert any(event.event_type == "media.completed" for event in final.events)
+    assert any(event.event_type == "job.activity" for event in final.events)
+    assert any(event.event_type == "report.preview.updated" for event in final.events)
+    assert final.workflow is not None
+    assert final.activity is not None
+    assert final.workflow.active_node_ids == []
 
     image_block = next(block for block in final.report.sections if block.id == "event-impact-image")
     video_block = next(block for block in final.report.sections if block.id == "event-impact-video")
@@ -183,5 +279,6 @@ def test_end_to_end_event_order_streams_blocks_before_media(tmp_path):
     final = store.get_job(job.job_id)
     assert final is not None
     event_types = [event.event_type for event in final.events]
+    assert event_types.index("report.preview.updated") < event_types.index("timeline.ready")
     assert event_types.index("block.created") < event_types.index("media.completed")
     ReportDocument.model_validate(final.report.model_dump(mode="json"))

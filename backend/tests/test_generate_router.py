@@ -54,6 +54,8 @@ def test_create_report_job_returns_202(monkeypatch, tmp_path):
     stored = store.get_job(body["job_id"])
     assert stored is not None
     assert stored.status == ReportGenerationJobStatus.queued
+    assert stored.activity is not None
+    assert stored.workflow is not None
 
 
 def test_stream_and_report_endpoints_return_job_events(monkeypatch, tmp_path):
@@ -127,6 +129,8 @@ def test_stream_and_report_endpoints_return_job_events(monkeypatch, tmp_path):
     assert job_response.status_code == 200
     job_body = job_response.json()
     assert job_body["artifacts"]["report_url"] == "https://signed.test/test-bucket/reports/report-router/report.json"
+    assert "activity" in job_body
+    assert "workflow" in job_body
     assert (
         job_body["report"]["sections"][0]["media"][0]["uri"]
         == "https://signed.test/test-bucket/reports/report-router/media/impact.png"

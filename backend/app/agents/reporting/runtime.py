@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import json
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app.agents.reporting.agent_builder import (
     CASE_BUNDLE_STATE,
@@ -13,6 +14,11 @@ from app.agents.reporting.agent_builder import (
     build_root_agent,
 )
 from app.agents.reporting.fallback import HeuristicReportingPipeline
+from app.agents.reporting.progress import (
+    PipelinePreviewSnapshot,
+    PipelineProgressEvent,
+    ProgressEventBuffer,
+)
 from app.agents.reporting.types import (
     ComposerOutput,
     ContextPlan,
@@ -38,6 +44,8 @@ from app.config import (
 )
 from app.models import CaseEvidenceBundle
 
+ProgressCallback = Callable[[PipelineProgressEvent], Awaitable[None] | None]
+
 
 class AdkReportingPipeline:
     APP_NAME = "clarion_reporting"
@@ -60,6 +68,7 @@ class AdkReportingPipeline:
         bundle: CaseEvidenceBundle,
         report_id: str,
         user_id: str,
+        progress_callback: ProgressCallback | None = None,
     ) -> PipelineResult:
         from google.adk.artifacts import GcsArtifactService, InMemoryArtifactService
         from google.adk.apps import App
@@ -68,7 +77,8 @@ class AdkReportingPipeline:
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
-        root_agent = build_root_agent(self.policy)
+        progress_events = ProgressEventBuffer()
+        root_agent = build_root_agent(self.policy, progress_events=progress_events)
         session_service = InMemorySessionService()
         artifact_service = (
             InMemoryArtifactService()
@@ -116,12 +126,22 @@ class AdkReportingPipeline:
             ],
         )
 
+        preview_snapshot = PipelinePreviewSnapshot()
+
         async for _event in runner.run_async(
             user_id=user_id,
             session_id=session_id,
             new_message=prompt,
         ):
-            continue
+            await _drain_progress_events(progress_events, progress_callback)
+            await _emit_snapshot_updates(
+                getattr(getattr(_event, "actions", None), "state_delta", {}) or {},
+                preview_snapshot=preview_snapshot,
+                progress_callback=progress_callback,
+            )
+            await _drain_progress_events(progress_events, progress_callback)
+
+        await _drain_progress_events(progress_events, progress_callback)
 
         session = await session_service.get_session(
             app_name=self.APP_NAME,
@@ -186,6 +206,87 @@ def build_reporting_pipeline(
 
 def _model_from_state(state: dict[str, Any], key: str, model_type: type[Any]) -> Any:
     value = state.get(key)
+    if isinstance(value, model_type):
+        return value
+    if isinstance(value, str):
+        try:
+            return model_type.model_validate_json(value)
+        except Exception:
+            return model_type.model_validate(json.loads(value))
+    return model_type.model_validate(value or {})
+
+
+async def _drain_progress_events(
+    progress_events: ProgressEventBuffer,
+    progress_callback: ProgressCallback | None,
+) -> None:
+    for event in progress_events.drain():
+        await _emit_progress(progress_callback, event)
+
+
+async def _emit_snapshot_updates(
+    state_delta: dict[str, Any],
+    *,
+    preview_snapshot: PipelinePreviewSnapshot,
+    progress_callback: ProgressCallback | None,
+) -> None:
+    updated = False
+    reason = ""
+
+    if TIMELINE_PLAN_STATE in state_delta:
+        preview_snapshot.timeline_plan = _model_from_value(
+            state_delta[TIMELINE_PLAN_STATE],
+            TimelinePlan,
+        )
+        updated = True
+        reason = "timeline_plan"
+
+    if CONTEXT_PLAN_STATE in state_delta:
+        preview_snapshot.context_plan = _model_from_value(
+            state_delta[CONTEXT_PLAN_STATE],
+            ContextPlan,
+        )
+        updated = True
+        reason = "context_plan"
+
+    if MEDIA_PLAN_STATE in state_delta:
+        preview_snapshot.media_plan = _model_from_value(
+            state_delta[MEDIA_PLAN_STATE],
+            MediaPlan,
+        )
+        updated = True
+        reason = "media_plan"
+
+    if COMPOSER_STATE in state_delta:
+        preview_snapshot.composer_output = _model_from_value(
+            state_delta[COMPOSER_STATE],
+            ComposerOutput,
+        )
+        updated = True
+        reason = "composer_output"
+
+    if updated:
+        await _emit_progress(
+            progress_callback,
+            PipelineProgressEvent.snapshot_updated(
+                preview_snapshot.copy(),
+                preview_reason=reason,
+            ),
+        )
+
+
+async def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    event: PipelineProgressEvent,
+) -> None:
+    if progress_callback is None:
+        return
+    result = progress_callback(event)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _model_from_value(value: Any, model_type: type[Any]) -> Any:
     if isinstance(value, model_type):
         return value
     if isinstance(value, str):

@@ -51,9 +51,54 @@ class ReportGenerationJobStatus(str, Enum):
     failed = "failed"
 
 
+class ReportGenerationPhase(str, Enum):
+    queued = "queued"
+    intake = "intake"
+    timeline_planning = "timeline_planning"
+    grounding_review = "grounding_review"
+    parallel_planning = "parallel_planning"
+    composition = "composition"
+    media_generation = "media_generation"
+    finalizing = "finalizing"
+
+
+class ReportGenerationActivityStatus(str, Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
 class MediaAssetKind(str, Enum):
     image = "image"
     video = "video"
+
+
+class ReportWorkflowNodeKind(str, Enum):
+    agent = "agent"
+    worker = "worker"
+
+
+class ReportWorkflowLane(str, Enum):
+    chronology = "chronology"
+    review = "review"
+    planning = "planning"
+    composition = "composition"
+    media = "media"
+    finalize = "finalize"
+
+
+class ReportWorkflowEdgeRelation(str, Enum):
+    sequence = "sequence"
+    loop = "loop"
+    parallel = "parallel"
+
+
+class ReportWorkflowNodeStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    skipped = "skipped"
 
 
 class SourceSpan(BaseModel):
@@ -176,6 +221,49 @@ class ReportArtifactRefs(BaseModel):
     manifest_gcs_uri: Optional[str] = None
 
 
+class ReportGenerationActivity(BaseModel):
+    phase: ReportGenerationPhase
+    status: ReportGenerationActivityStatus = ReportGenerationActivityStatus.running
+    label: str = Field(min_length=1)
+    detail: Optional[str] = None
+    node_id: Optional[str] = None
+    active_node_ids: list[str] = Field(default_factory=list)
+    attempt: Optional[int] = Field(default=None, ge=1)
+    max_attempts: Optional[int] = Field(default=None, ge=1)
+    updated_at: datetime
+
+
+class ReportWorkflowNode(BaseModel):
+    node_id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    kind: ReportWorkflowNodeKind
+    lane: ReportWorkflowLane
+    optional: bool = False
+
+
+class ReportWorkflowEdge(BaseModel):
+    source_node_id: str = Field(min_length=1)
+    target_node_id: str = Field(min_length=1)
+    relation: ReportWorkflowEdgeRelation
+
+
+class ReportWorkflowNodeState(BaseModel):
+    node_id: str = Field(min_length=1)
+    status: ReportWorkflowNodeStatus = ReportWorkflowNodeStatus.pending
+    detail: Optional[str] = None
+    attempt: Optional[int] = Field(default=None, ge=1)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class ReportWorkflowState(BaseModel):
+    version: str = Field(default="v1", min_length=1)
+    nodes: list[ReportWorkflowNode] = Field(default_factory=list)
+    edges: list[ReportWorkflowEdge] = Field(default_factory=list)
+    node_states: list[ReportWorkflowNodeState] = Field(default_factory=list)
+    active_node_ids: list[str] = Field(default_factory=list)
+
+
 class ReportDocument(BaseModel):
     report_id: str = Field(min_length=1)
     status: ReportStatus = ReportStatus.running
@@ -208,6 +296,8 @@ class ReportGenerationJobStatusResponse(BaseModel):
     error: Optional[str] = None
     report: Optional[ReportDocument] = None
     artifacts: Optional[ReportArtifactRefs] = None
+    activity: Optional[ReportGenerationActivity] = None
+    workflow: Optional[ReportWorkflowState] = None
 
 
 class ReportGenerationJobRecord(ReportGenerationJobStatusResponse):

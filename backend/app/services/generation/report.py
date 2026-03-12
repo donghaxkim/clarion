@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.agents.reporting.progress import PipelinePreviewSnapshot
 from app.agents.reporting.types import ComposedBlockDraft, MediaRequest, PipelineResult
 from app.models import (
     MediaAsset,
     ReportBlock,
     ReportBlockState,
+    ReportBlockType,
     ReportDocument,
     ReportProvenance,
     ReportStatus,
@@ -23,6 +25,37 @@ def create_initial_report(report_id: str, draft: PipelineResult) -> ReportDocume
         status=ReportStatus.running,
         sections=blocks,
         warnings=list(draft.warnings),
+        generated_at=None,
+    )
+
+
+def create_preview_report(
+    report_id: str,
+    *,
+    snapshot: PipelinePreviewSnapshot,
+    warnings: list[str] | None = None,
+) -> ReportDocument:
+    blocks: list[ReportBlock] = []
+
+    if snapshot.composer_output is not None:
+        blocks.extend(_draft_to_block(block) for block in snapshot.composer_output.blocks)
+    elif snapshot.timeline_plan is not None:
+        blocks.extend(_timeline_plan_to_preview_blocks(snapshot.timeline_plan))
+        blocks.extend(_context_plan_to_preview_blocks(snapshot.context_plan))
+
+    if snapshot.media_plan is not None:
+        blocks.extend(_media_request_to_block(request) for request in snapshot.media_plan.image_requests)
+        blocks.extend(
+            _media_request_to_block(request)
+            for request in snapshot.media_plan.reconstruction_requests
+        )
+
+    blocks.sort(key=lambda block: block.sort_key)
+    return ReportDocument(
+        report_id=report_id,
+        status=ReportStatus.running,
+        sections=blocks,
+        warnings=list(warnings or []),
         generated_at=None,
     )
 
@@ -98,3 +131,77 @@ def _media_request_to_block(request: MediaRequest) -> ReportBlock:
         media=[],
         state=ReportBlockState.pending,
     )
+
+
+def _timeline_plan_to_preview_blocks(snapshot) -> list[ReportBlock]:
+    timeline_lines = []
+    for event in snapshot.timeline_events:
+        label = f"{event.timestamp_label}: " if event.timestamp_label else ""
+        timeline_lines.append(f"{label}{event.title}")
+
+    blocks = [
+        ReportBlock(
+            id="timeline-overview",
+            type=ReportBlockType.timeline,
+            title="Chronological Overview",
+            content="\n".join(timeline_lines),
+            sort_key="0000",
+            provenance=ReportProvenance.evidence,
+            confidence_score=max(
+                [event.confidence_score for event in snapshot.timeline_events],
+                default=0.72,
+            ),
+            citations=_merge_citations(
+                [event.citations for event in snapshot.timeline_events]
+            ),
+            media=[],
+            state=ReportBlockState.pending,
+        )
+    ]
+
+    for event in snapshot.timeline_events:
+        blocks.append(
+            ReportBlock(
+                id=f"event-{event.event_id}",
+                type=ReportBlockType.text,
+                title=event.title,
+                content=event.narrative,
+                sort_key=event.sort_key,
+                provenance=ReportProvenance.evidence,
+                confidence_score=event.confidence_score or 0.7,
+                citations=event.citations,
+                media=[],
+                state=ReportBlockState.pending,
+            )
+        )
+    return blocks
+
+
+def _context_plan_to_preview_blocks(snapshot) -> list[ReportBlock]:
+    if snapshot is None:
+        return []
+
+    return [
+        ReportBlock(
+            id=f"context-{index}",
+            type=ReportBlockType.text,
+            title=note.title,
+            content=note.content,
+            sort_key=note.sort_key,
+            provenance=ReportProvenance.public_context,
+            confidence_score=note.confidence_score,
+            citations=note.citations,
+            media=[],
+            state=ReportBlockState.pending,
+        )
+        for index, note in enumerate(snapshot.notes, start=1)
+    ]
+
+
+def _merge_citations(citation_groups: list[list]) -> list:
+    deduped: dict[tuple[str, str], object] = {}
+    for citations in citation_groups:
+        for citation in citations:
+            key = (citation.source_id, citation.provenance.value)
+            deduped[key] = citation
+    return list(deduped.values())

@@ -6,7 +6,13 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.config import GCS_ALLOW_LOCAL_FALLBACK, LOCAL_ARTIFACTS_DIR, REPORT_JOB_STORE_PATH
+from app.agents.reporting.progress import build_queued_activity, build_workflow_state
+from app.config import (
+    GCS_ALLOW_LOCAL_FALLBACK,
+    LOCAL_ARTIFACTS_DIR,
+    REPORT_ENABLE_PUBLIC_CONTEXT,
+    REPORT_JOB_STORE_PATH,
+)
 from app.models import (
     Citation,
     GenerateReportJobAcceptedResponse,
@@ -32,7 +38,18 @@ orchestrator = ReportGenerationOrchestrator(job_store=job_store)
 async def create_report_job(payload: GenerateReportRequest):
     report_id = str(uuid.uuid4())
     report = ReportDocument(report_id=report_id, status=ReportStatus.running)
-    job = job_store.create_job(report=report)
+    workflow = build_workflow_state(
+        enable_public_context=(
+            payload.enable_public_context
+            if payload.enable_public_context is not None
+            else REPORT_ENABLE_PUBLIC_CONTEXT
+        )
+    )
+    job = job_store.create_job(
+        report=report,
+        activity=build_queued_activity(),
+        workflow=workflow,
+    )
     asyncio.create_task(orchestrator.run_job(job.job_id, payload))
     return GenerateReportJobAcceptedResponse(
         job_id=job.job_id,

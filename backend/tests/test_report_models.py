@@ -103,6 +103,54 @@ def test_composer_output_normalization_backfills_timeline_and_event_citations():
     assert normalized.blocks[1].citations[0].source_id == "ev-1"
 
 
+def test_composer_output_normalization_sorts_blocks_by_sort_key():
+    citation = Citation(source_id="ev-1", provenance=ReportProvenance.evidence)
+    timeline = TimelinePlan(
+        timeline_events=[
+            {
+                "event_id": "impact",
+                "title": "Impact",
+                "narrative": "Collision occurs.",
+                "sort_key": "0001",
+                "evidence_refs": ["ev-1"],
+                "citations": [citation.model_dump(mode="json")],
+            }
+        ]
+    )
+    output = ComposerOutput(
+        blocks=[
+            {
+                "id": "event-impact",
+                "type": ReportBlockType.text,
+                "title": "Impact",
+                "content": "Collision occurs.",
+                "sort_key": "0001",
+                "provenance": ReportProvenance.evidence,
+                "confidence_score": 0.8,
+                "citations": [citation.model_dump(mode="json")],
+            },
+            {
+                "id": "timeline-overview",
+                "type": ReportBlockType.timeline,
+                "title": "Chronology",
+                "content": "Impact",
+                "sort_key": "0000",
+                "provenance": ReportProvenance.evidence,
+                "confidence_score": 0.9,
+                "citations": [citation.model_dump(mode="json")],
+            },
+        ]
+    )
+
+    normalized = normalize_composer_output(output, timeline)
+
+    assert not validate_composer_output(normalized)
+    assert [block.id for block in normalized.blocks] == [
+        "timeline-overview",
+        "event-impact",
+    ]
+
+
 def test_report_document_and_request_models_validate():
     bundle = CaseEvidenceBundle(
         case_id="case-1",

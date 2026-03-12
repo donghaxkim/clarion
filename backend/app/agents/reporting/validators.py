@@ -65,7 +65,11 @@ def normalize_composer_output(output: ComposerOutput, timeline: TimelinePlan) ->
 
     updated_blocks = []
     changed = False
-    for block in output.blocks:
+    sorted_blocks = sorted(output.blocks, key=lambda block: block.sort_key)
+    if sorted_blocks != output.blocks:
+        changed = True
+
+    for block in sorted_blocks:
         if block.provenance != ReportProvenance.evidence or block.citations:
             updated_blocks.append(block)
             continue

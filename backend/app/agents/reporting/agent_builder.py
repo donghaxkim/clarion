@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.reporting.callbacks import after_model_guard, before_model_guard
+from app.agents.reporting.callbacks import (
+    after_model_guard,
+    before_model_guard,
+    build_progress_callbacks,
+)
+from app.agents.reporting.progress import ProgressEventBuffer
 from app.agents.reporting.types import (
     ComposerOutput,
     ContextPlan,
@@ -21,7 +26,11 @@ MEDIA_PLAN_STATE = "media_plan_json"
 COMPOSER_STATE = "composer_output_json"
 
 
-def build_root_agent(policy: ReportGenerationPolicy) -> Any:
+def build_root_agent(
+    policy: ReportGenerationPolicy,
+    *,
+    progress_events: ProgressEventBuffer | None = None,
+) -> Any:
     from google.adk.agents import LoopAgent, LlmAgent, SequentialAgent
     from google.adk.agents.parallel_agent import ParallelAgent
     from google.adk.tools.google_search_agent_tool import (
@@ -38,6 +47,7 @@ def build_root_agent(policy: ReportGenerationPolicy) -> Any:
         output_schema=TimelinePlan,
         output_key=TIMELINE_PLAN_STATE,
         before_model_callback=before_model_guard,
+        **build_progress_callbacks(progress_events),
     )
 
     reviewer_agent = LlmAgent(
@@ -49,6 +59,7 @@ def build_root_agent(policy: ReportGenerationPolicy) -> Any:
         output_schema=GroundingReview,
         output_key=GROUNDING_REVIEW_STATE,
         before_model_callback=before_model_guard,
+        **build_progress_callbacks(progress_events),
     )
 
     refiner_agent = LlmAgent(
@@ -61,6 +72,7 @@ def build_root_agent(policy: ReportGenerationPolicy) -> Any:
         output_key=TIMELINE_PLAN_STATE,
         tools=[exit_review_loop],
         before_model_callback=before_model_guard,
+        **build_progress_callbacks(progress_events),
     )
 
     review_loop = LoopAgent(
@@ -84,6 +96,7 @@ def build_root_agent(policy: ReportGenerationPolicy) -> Any:
         output_key=CONTEXT_PLAN_STATE,
         tools=context_tools,
         before_model_callback=before_model_guard,
+        **build_progress_callbacks(progress_events, include_tool_detail=bool(context_tools)),
     )
 
     media_planner = LlmAgent(
@@ -95,6 +108,7 @@ def build_root_agent(policy: ReportGenerationPolicy) -> Any:
         output_schema=MediaPlan,
         output_key=MEDIA_PLAN_STATE,
         before_model_callback=before_model_guard,
+        **build_progress_callbacks(progress_events),
     )
 
     enrichment_parallel = ParallelAgent(
@@ -113,6 +127,7 @@ def build_root_agent(policy: ReportGenerationPolicy) -> Any:
         output_key=COMPOSER_STATE,
         before_model_callback=before_model_guard,
         after_model_callback=after_model_guard,
+        **build_progress_callbacks(progress_events),
     )
 
     return SequentialAgent(
@@ -240,10 +255,10 @@ Optional context notes:
 {{{CONTEXT_PLAN_STATE}}}
 
 Rules:
- - Always create one timeline block first.
+ - Always create one timeline block first with id timeline-overview.
  - The timeline block must include merged evidence citations from the events it summarizes.
  - Then create one evidence text block per event with id format event-<event_id>.
-- Context notes must become separate text blocks with provenance=public_context.
+- Context notes must become separate text blocks with provenance=public_context and id format context-<index> based on note order.
 - Evidence blocks must use only evidence citations.
 - Public-context blocks must use only public_context citations.
 - Blocks must already be sorted by sort_key.

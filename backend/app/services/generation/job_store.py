@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.models import (
+    ReportGenerationActivity,
     ReportArtifactRefs,
     ReportDocument,
     ReportGenerationJobRecord,
@@ -14,6 +15,7 @@ from app.models import (
     ReportGenerationJobStatusResponse,
     ReportJobEvent,
     ReportStatus,
+    ReportWorkflowState,
 )
 
 
@@ -25,7 +27,13 @@ class ReportJobStore:
         if not self.path.exists():
             self._write_payload({"jobs": {}, "reports": {}})
 
-    def create_job(self, *, report: ReportDocument) -> ReportGenerationJobRecord:
+    def create_job(
+        self,
+        *,
+        report: ReportDocument,
+        activity: ReportGenerationActivity | None = None,
+        workflow: ReportWorkflowState | None = None,
+    ) -> ReportGenerationJobRecord:
         job = ReportGenerationJobRecord(
             job_id=str(uuid.uuid4()),
             report_id=report.report_id,
@@ -35,6 +43,8 @@ class ReportJobStore:
             error=None,
             report=report,
             artifacts=None,
+            activity=activity,
+            workflow=workflow,
             events=[],
         )
         with self._lock:
@@ -84,6 +94,8 @@ class ReportJobStore:
         error: str | None = None,
         report: ReportDocument | None = None,
         artifacts: ReportArtifactRefs | None = None,
+        activity: ReportGenerationActivity | None = None,
+        workflow: ReportWorkflowState | None = None,
     ) -> ReportGenerationJobRecord:
         with self._lock:
             state = self._read_payload()
@@ -106,6 +118,8 @@ class ReportJobStore:
                 "error": error,
                 "report": updated_report,
                 "artifacts": artifacts or job.artifacts,
+                "activity": activity or job.activity,
+                "workflow": workflow or job.workflow,
             }
             if status is not None:
                 updates["status"] = status
