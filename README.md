@@ -6,7 +6,7 @@
 2. **Finds contradictions** — Flags conflicting statements between sources (e.g. witness vs report).
 3. **Generates reports** — Produces courtroom-ready reports you can stream, edit via chat, and export. Reports can include **AI-generated video** — scene reconstructions generated from witness descriptions (e.g. from testimony or statements), so you can present a visual version of the described events in court.
 
-You create a case, upload evidence, and use the REST API (or future frontend) to generate reports, see contradictions, and include witness-based scene videos where needed. Optional Google Gemini is used for summarization and analysis; mocks are available for testing without an API key.
+You create a case, upload evidence, and use the REST API (or future frontend) to generate reports, see contradictions, and include witness-based scene videos where needed. A **voice agent** (push-to-talk over WebSocket) lets you ask case questions and edit report sections via speech. Optional Google Gemini is used for summarization, analysis, and the voice agent; mocks are available for testing without an API key.
 
 ---
 
@@ -27,7 +27,7 @@ PYTHONPATH=. uvicorn app.main:app --reload
 ## Tech
 
 - **Backend:** Python, FastAPI, Pydantic  
-- **AI:** Google Gemini (optional)  
+- **AI:** Google Gemini (optional); voice agent via Gemini Live API (WebSocket)  
 - **Storage:** Local uploads by default; schema supports GCS URLs  
 
 For full API reference, project structure, and schema details, see the in-repo docs or `backend/app/models/schema.py`.
