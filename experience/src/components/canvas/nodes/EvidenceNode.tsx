@@ -31,6 +31,7 @@ export interface EvidenceNodeData {
   pinned?: boolean;
   analyzing?: boolean;
   hasConnections?: boolean;
+  lastValidPosition?: { x: number; y: number };
   [key: string]: unknown;
 }
 

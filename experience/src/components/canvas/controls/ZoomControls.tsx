@@ -2,10 +2,14 @@
 
 import React, { useState } from 'react';
 import { useReactFlow, useViewport } from '@xyflow/react';
-import { Plus, Minus, Maximize2 } from 'lucide-react';
+import { Plus, Minus, RotateCcw } from 'lucide-react';
 
-export function ZoomControls() {
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+interface ZoomControlsProps {
+  onReset?: () => void;
+}
+
+export function ZoomControls({ onReset }: ZoomControlsProps) {
+  const { zoomIn, zoomOut } = useReactFlow();
   const { zoom } = useViewport();
 
   return (
@@ -13,7 +17,7 @@ export function ZoomControls() {
       style={{
         position: 'absolute',
         bottom: '24px',
-        right: '20px',
+        left: '20px',
         zIndex: 10,
         background: 'var(--bg-surface)',
         border: '1px solid var(--border)',
@@ -56,10 +60,10 @@ export function ZoomControls() {
       <div style={{ height: '1px', background: 'var(--border)', margin: '2px 0' }} />
 
       <ZoomButton
-        title="Fit view"
-        onClick={() => fitView({ duration: 400, padding: 0.15 })}
+        title="Reset layout"
+        onClick={() => onReset?.()}
       >
-        <Maximize2 size={13} strokeWidth={2} />
+        <RotateCcw size={13} strokeWidth={2} />
       </ZoomButton>
     </div>
   );
