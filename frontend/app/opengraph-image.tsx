@@ -68,7 +68,7 @@ export default function OpenGraphImage() {
           </div>
           <div style={{ display: "flex", gap: 32 }}>
             <div style={{ width: "34%", display: "flex", flexDirection: "column", gap: 16 }}>
-              {["Timeline", "Narrative", "Media", "Citations"].map((item, index) => (
+              {["Text", "Image", "Video", "Citations"].map((item, index) => (
                 <div
                   key={item}
                   style={{
@@ -102,8 +102,8 @@ export default function OpenGraphImage() {
                   maxWidth: 680,
                 }}
               >
-                Live chronology, multimodal media blocks, and section-scoped
-                citations in a single courtroom-ready canvas.
+                Live chronology planning, text and media blocks, and
+                section-scoped citations in a single courtroom-ready canvas.
               </div>
             </div>
           </div>

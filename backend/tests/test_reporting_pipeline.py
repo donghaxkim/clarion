@@ -10,6 +10,7 @@ from app.models import (
     EvidenceItem,
     EvidenceItemType,
     EventCandidate,
+    ReportBlockType,
     ReportProvenance,
 )
 
@@ -72,10 +73,14 @@ def test_fallback_pipeline_uses_event_candidates_and_separates_public_context():
 
     result = asyncio.run(pipeline.run(bundle=_bundle(), report_id="report-1", user_id="user-1"))
 
-    assert result.blocks[0].id == "timeline-overview"
+    assert all(block.type == ReportBlockType.text for block in result.blocks)
+    assert all(block.id != "timeline-overview" for block in result.blocks)
+    assert result.blocks[0].id == "event-event-1"
     assert any(block.provenance == ReportProvenance.public_context for block in result.blocks)
     assert len(result.image_requests) == 1
     assert len(result.reconstruction_requests) == 1
+    assert result.image_requests[0].block_type == ReportBlockType.image
+    assert result.reconstruction_requests[0].block_type == ReportBlockType.video
     assert all(
         citation.provenance == ReportProvenance.public_context
         for block in result.blocks

@@ -11,7 +11,7 @@ const evidenceChips = [
 const featureCards = [
   {
     title: "Live Chronology",
-    body: "Watch the report lock into place as timeline, narrative, image, and reconstruction blocks arrive.",
+    body: "Watch the report lock into place as text, image, and reconstruction video blocks arrive.",
   },
   {
     title: "Margin Citations",

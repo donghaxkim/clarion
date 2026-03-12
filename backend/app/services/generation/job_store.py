@@ -123,8 +123,13 @@ class ReportJobStore:
             }
             if status is not None:
                 updates["status"] = status
-            if progress is not None:
-                updates["progress"] = progress
+            resolved_progress = _resolve_progress(
+                current_progress=job.progress,
+                next_progress=progress,
+                next_status=status,
+            )
+            if resolved_progress is not None:
+                updates["progress"] = resolved_progress
 
             updated = job.model_copy(update=updates)
             state["jobs"][job_id] = updated.model_dump(mode="json")
@@ -160,7 +165,6 @@ class ReportJobStore:
             event_type="job.failed",
             payload={"error": message},
             status=ReportGenerationJobStatus.failed,
-            progress=100,
             error=message,
             report=failed_report,
         )
@@ -190,3 +194,18 @@ class ReportJobStore:
         if not job_data:
             raise KeyError(f"Unknown job_id: {job_id}")
         return ReportGenerationJobRecord.model_validate(job_data)
+
+
+def _resolve_progress(
+    *,
+    current_progress: int,
+    next_progress: int | None,
+    next_status: ReportGenerationJobStatus | None,
+) -> int | None:
+    if next_status == ReportGenerationJobStatus.completed:
+        return 100
+    if next_status == ReportGenerationJobStatus.failed:
+        return current_progress
+    if next_progress is None:
+        return None
+    return max(current_progress, next_progress)

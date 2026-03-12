@@ -11,6 +11,7 @@ import {
   useEffect,
   useEffectEvent,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -486,9 +487,18 @@ function StatusCard({
   streamState: StreamState;
   activity?: ReportGenerationActivity | null;
 }) {
+  const animatedProgress = useAnimatedProgress(
+    progress,
+    status,
+    jobId ?? reportId,
+  );
+  const roundedProgress =
+    typeof animatedProgress === "number"
+      ? Math.round(Math.max(0, Math.min(100, animatedProgress)))
+      : undefined;
   const progressValue =
-    typeof progress === "number"
-      ? `${Math.max(0, Math.min(100, progress))}%`
+    typeof roundedProgress === "number"
+      ? `${roundedProgress}%`
       : formatStatusLabel(report?.status ?? "running");
 
   return (
@@ -501,11 +511,11 @@ function StatusCard({
       </div>
       <div className="mt-4">
         <p className="text-4xl font-semibold text-paper">{progressValue}</p>
-        {typeof progress === "number" ? (
+        {typeof roundedProgress === "number" ? (
           <div className="mt-4 h-2 overflow-hidden rounded-full bg-paper/10">
             <div
-              className="h-full rounded-full bg-[linear-gradient(90deg,_rgba(214,125,68,1),_rgba(231,193,132,1))] transition-[width] duration-300 ease-out"
-              style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+              className="h-full rounded-full bg-[linear-gradient(90deg,_rgba(214,125,68,1),_rgba(231,193,132,1))]"
+              style={{ width: `${animatedProgress}%` }}
             />
           </div>
         ) : null}
@@ -637,26 +647,7 @@ function SectionCard({
 
           {block.content ? (
             <div className="mt-6 max-w-none text-pretty text-lg leading-8 text-[#2e241c]">
-              {block.type === "timeline" ? (
-                <ol className="space-y-4">
-                  {block.content
-                    .split("\n")
-                    .filter(Boolean)
-                    .map((line, index) => (
-                      <li
-                        key={`${block.id}-${index}`}
-                        className="grid grid-cols-[auto_1fr] gap-4"
-                      >
-                        <span className="pt-1 font-mono text-xs uppercase tracking-[0.24em] text-[#9a5a34]">
-                          {(index + 1).toString().padStart(2, "0")}
-                        </span>
-                        <span className="min-w-0 break-words">{line}</span>
-                      </li>
-                    ))}
-                </ol>
-              ) : (
-                <p className="break-words whitespace-pre-wrap">{block.content}</p>
-              )}
+              <p className="break-words whitespace-pre-wrap">{block.content}</p>
             </div>
           ) : null}
 
@@ -998,6 +989,131 @@ function fallbackBlockTitle(block: ReportBlock) {
 
 function isTerminalStatus(status: string) {
   return status === "completed" || status === "failed";
+}
+
+function useAnimatedProgress(
+  progress: number | undefined,
+  status: string,
+  identity: string,
+) {
+  const normalizedProgress =
+    typeof progress === "number"
+      ? Math.max(0, Math.min(100, progress))
+      : undefined;
+  const [displayProgress, setDisplayProgress] = useState<number | undefined>(
+    normalizedProgress,
+  );
+  const displayProgressRef = useRef<number | undefined>(normalizedProgress);
+  const normalizedProgressRef = useRef<number | undefined>(normalizedProgress);
+  const animationFrameRef = useRef<number | null>(null);
+  const syncFrameRef = useRef<number | null>(null);
+
+  function scheduleProgressSync(nextProgress: number | undefined) {
+    if (syncFrameRef.current !== null) {
+      cancelAnimationFrame(syncFrameRef.current);
+    }
+
+    syncFrameRef.current = requestAnimationFrame(() => {
+      displayProgressRef.current = nextProgress;
+      startTransition(() => {
+        setDisplayProgress(nextProgress);
+      });
+      syncFrameRef.current = null;
+    });
+  }
+
+  useEffect(() => {
+    displayProgressRef.current = displayProgress;
+  }, [displayProgress]);
+
+  useEffect(() => {
+    normalizedProgressRef.current = normalizedProgress;
+  }, [normalizedProgress]);
+
+  useEffect(() => {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    scheduleProgressSync(normalizedProgressRef.current);
+  }, [identity]);
+
+  useEffect(() => {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (normalizedProgress === undefined) {
+      scheduleProgressSync(undefined);
+      return;
+    }
+
+    const currentProgress = displayProgressRef.current;
+    if (status === "failed") {
+      const frozenProgress = currentProgress ?? normalizedProgress;
+      if (frozenProgress !== currentProgress) {
+        scheduleProgressSync(frozenProgress);
+      }
+      return;
+    }
+
+    if (currentProgress === undefined) {
+      scheduleProgressSync(normalizedProgress);
+      return;
+    }
+
+    if (normalizedProgress <= currentProgress) {
+      return;
+    }
+
+    if (
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      scheduleProgressSync(normalizedProgress);
+      return;
+    }
+
+    let lastFrameAt: number | null = null;
+
+    const tick = (frameAt: number) => {
+      const previousValue = displayProgressRef.current ?? currentProgress;
+      const elapsedMs = lastFrameAt === null ? 16 : frameAt - lastFrameAt;
+      lastFrameAt = frameAt;
+
+      const nextValue = Math.min(
+        normalizedProgress,
+        previousValue + Math.max(0.6, (elapsedMs / 1000) * 36),
+      );
+
+      displayProgressRef.current = nextValue;
+      startTransition(() => {
+        setDisplayProgress(nextValue);
+      });
+
+      if (nextValue >= normalizedProgress) {
+        animationFrameRef.current = null;
+        return;
+      }
+
+      animationFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (syncFrameRef.current !== null) {
+        cancelAnimationFrame(syncFrameRef.current);
+        syncFrameRef.current = null;
+      }
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [normalizedProgress, status]);
+
+  return displayProgress;
 }
 
 async function readResponseDetail(response: Response) {

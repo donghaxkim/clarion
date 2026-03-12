@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.agents.reporting.types import ComposerOutput, TimelinePlan
-from app.models import CaseEvidenceBundle, ReportBlockType, ReportProvenance
+from app.models import CaseEvidenceBundle, ReportProvenance
 
 
 def validate_timeline_plan(bundle: CaseEvidenceBundle, plan: TimelinePlan) -> list[str]:
@@ -59,9 +59,6 @@ def normalize_composer_output(output: ComposerOutput, timeline: TimelinePlan) ->
     event_citation_lookup = {
         event.event_id: list(event.citations) for event in timeline.timeline_events if event.citations
     }
-    timeline_citations = _merge_citations(
-        [event.citations for event in timeline.timeline_events if event.citations]
-    )
 
     updated_blocks = []
     changed = False
@@ -75,9 +72,7 @@ def normalize_composer_output(output: ComposerOutput, timeline: TimelinePlan) ->
             continue
 
         citations = []
-        if block.type == ReportBlockType.timeline or block.id.startswith("timeline"):
-            citations = timeline_citations
-        elif block.id.startswith("event-"):
+        if block.id.startswith("event-"):
             event_id = block.id.removeprefix("event-")
             citations = event_citation_lookup.get(event_id, [])
 
@@ -91,11 +86,3 @@ def normalize_composer_output(output: ComposerOutput, timeline: TimelinePlan) ->
     if not changed:
         return output
     return output.model_copy(update={"blocks": updated_blocks})
-
-
-def _merge_citations(citation_groups: list[list]) -> list:
-    deduped = {}
-    for citations in citation_groups:
-        for citation in citations:
-            deduped[(citation.source_id, citation.provenance.value)] = citation
-    return list(deduped.values())

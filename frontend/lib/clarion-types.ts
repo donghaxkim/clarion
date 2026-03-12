@@ -8,7 +8,7 @@ export type EvidenceItemType =
   | "official_record"
   | "other";
 
-export type ReportBlockType = "text" | "image" | "video" | "timeline";
+export type ReportBlockType = "text" | "image" | "video";
 export type ReportProvenance = "evidence" | "public_context";
 export type ReportBlockState = "pending" | "ready" | "failed";
 export type ReportStatus = "running" | "completed" | "failed";

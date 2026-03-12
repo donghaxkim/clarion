@@ -25,6 +25,7 @@ from app.models import (
 )
 from app.services.generation.image_generator import GeminiImageGenerator
 from app.services.generation.job_store import ReportJobStore
+from app.services.generation.progress import ReportProgressPolicy
 from app.services.generation.reconstruction_service import ReconstructionMediaService
 from app.services.generation.report import (
     attach_media_asset,
@@ -57,6 +58,7 @@ class ReportGenerationOrchestrator:
         self.reconstruction_service = reconstruction_service or ReconstructionMediaService()
         self.upload_bytes_fn = upload_bytes_fn
         self.storage_uri_fn = storage_uri_fn
+        self.progress_policy = ReportProgressPolicy()
 
     async def run_job(self, job_id: str, payload: GenerateReportRequest) -> None:
         job = self.job_store.get_job(job_id)
@@ -81,7 +83,7 @@ class ReportGenerationOrchestrator:
                 event_type="job.started",
                 payload={"report_id": job.report_id},
                 status=ReportGenerationJobStatus.planning,
-                progress=5,
+                progress=self.progress_policy.intake_started,
                 report=report,
                 activity=_build_intake_activity(payload),
                 workflow=tracker.workflow,
@@ -109,6 +111,7 @@ class ReportGenerationOrchestrator:
                 user_id=payload.user_id,
                 progress_callback=handle_progress,
             )
+            draft = _normalize_pipeline_result(draft)
 
             report = create_initial_report(job.report_id, draft)
             self.job_store.publish(
@@ -119,7 +122,7 @@ class ReportGenerationOrchestrator:
                     "warnings": draft.warnings,
                 },
                 status=ReportGenerationJobStatus.composing,
-                progress=80,
+                progress=self.progress_policy.timeline_ready,
                 report=report,
                 activity=tracker.activity,
                 workflow=tracker.workflow,
@@ -147,7 +150,7 @@ class ReportGenerationOrchestrator:
                 tracker=tracker,
                 report=report,
                 event=PipelineProgressEvent.node_started(NODE_REPORT_FINALIZER),
-                progress=97,
+                progress=self.progress_policy.finalizing_started,
             )
             report = finalize_report(report)
             artifacts = self._persist_report_artifacts(
@@ -159,7 +162,7 @@ class ReportGenerationOrchestrator:
                 tracker=tracker,
                 report=report,
                 event=PipelineProgressEvent.node_completed(NODE_REPORT_FINALIZER),
-                progress=99,
+                progress=self.progress_policy.finalizing_ready,
             )
             self.job_store.mark_completed(
                 job_id,
@@ -173,7 +176,7 @@ class ReportGenerationOrchestrator:
                     tracker=tracker,
                     report=report,
                     event=PipelineProgressEvent.node_failed(node_id, detail=str(exc)),
-                    progress=100,
+                    progress=None,
                 )
             self.job_store.mark_failed(job_id, _format_exception_message(exc))
 
@@ -197,7 +200,6 @@ class ReportGenerationOrchestrator:
                 if request.block_type.value == "image"
                 else NODE_RECONSTRUCTION_GENERATOR
             )
-            progress = 40 + int((index - 1) * 45 / max(total, 1))
             report = await self._publish_system_progress(
                 job_id=job_id,
                 tracker=tracker,
@@ -206,14 +208,13 @@ class ReportGenerationOrchestrator:
                     node_id,
                     detail=_media_detail(request, index=index, total=total),
                 ),
-                progress=progress,
+                progress=None,
             )
             self.job_store.publish(
                 job_id,
                 event_type="media.started",
                 payload={"block_id": request.block_id, "type": request.block_type.value},
                 status=ReportGenerationJobStatus.generating_media,
-                progress=progress,
                 report=report,
                 activity=tracker.activity,
                 workflow=tracker.workflow,
@@ -241,13 +242,19 @@ class ReportGenerationOrchestrator:
                         node_id,
                         detail=_media_detail(request, index=index, total=total),
                     ),
-                    progress=progress + 10,
+                    progress=self.progress_policy.progress_for_media_processed(
+                        processed_count=index,
+                        total_count=total,
+                    ),
                 )
                 self.job_store.publish(
                     job_id,
                     event_type="media.completed",
                     payload={"block_id": request.block_id, "uri": asset.uri},
-                    progress=progress + 10,
+                    progress=self.progress_policy.progress_for_media_processed(
+                        processed_count=index,
+                        total_count=total,
+                    ),
                     report=report,
                     activity=tracker.activity,
                     workflow=tracker.workflow,
@@ -263,7 +270,10 @@ class ReportGenerationOrchestrator:
                         node_id,
                         detail=_media_detail(request, index=index, total=total),
                     ),
-                    progress=progress + 10,
+                    progress=self.progress_policy.progress_for_media_processed(
+                        processed_count=index,
+                        total_count=total,
+                    ),
                 )
                 self.job_store.publish(
                     job_id,
@@ -354,7 +364,7 @@ class ReportGenerationOrchestrator:
     ):
         next_report = report
         workflow, activity, changed_node_ids = tracker.apply_event(event)
-        progress = _progress_for_event(event, activity)
+        progress = self.progress_policy.progress_for_pipeline_event(event)
         status = _status_for_activity(activity)
 
         if event.snapshot is not None:
@@ -393,7 +403,7 @@ class ReportGenerationOrchestrator:
         tracker: WorkflowProgressTracker,
         report,
         event: PipelineProgressEvent,
-        progress: int,
+        progress: int | None,
     ):
         workflow, activity, changed_node_ids = tracker.apply_event(event)
         self.job_store.publish(
@@ -452,32 +462,6 @@ def _status_for_activity(
     return ReportGenerationJobStatus.planning
 
 
-def _progress_for_event(
-    event: PipelineProgressEvent,
-    activity: ReportGenerationActivity | None,
-) -> int:
-    if event.preview_reason == "timeline_plan":
-        return 22
-    if event.preview_reason == "context_plan":
-        return 52
-    if event.preview_reason == "media_plan":
-        return 60
-    if event.preview_reason == "composer_output":
-        return 78
-    if activity is None:
-        return 5
-    return {
-        ReportGenerationPhase.queued: 0,
-        ReportGenerationPhase.intake: 5,
-        ReportGenerationPhase.timeline_planning: 12,
-        ReportGenerationPhase.grounding_review: 28,
-        ReportGenerationPhase.parallel_planning: 48,
-        ReportGenerationPhase.composition: 68,
-        ReportGenerationPhase.media_generation: 80,
-        ReportGenerationPhase.finalizing: 97,
-    }.get(activity.phase, 5)
-
-
 def _activity_payload(
     activity: ReportGenerationActivity | None,
     changed_node_ids: list[str],
@@ -491,3 +475,9 @@ def _activity_payload(
 def _media_detail(request: MediaRequest, *, index: int, total: int) -> str:
     kind = "image" if request.block_type.value == "image" else "reconstruction"
     return f"Rendering {kind} {index} of {total}: {request.title}"
+
+
+def _normalize_pipeline_result(draft: PipelineResult | object) -> PipelineResult:
+    if isinstance(draft, PipelineResult):
+        return PipelineResult.model_validate(draft.model_dump(mode="json"))
+    return PipelineResult.model_validate(draft)

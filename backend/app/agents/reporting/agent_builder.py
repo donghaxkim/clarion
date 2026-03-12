@@ -237,6 +237,8 @@ Rules:
 - Only plan media for the strongest, clearest chronology moments.
 - Image requests need prompt text and citations.
 - Reconstruction requests need scene_description, evidence_refs, and citations.
+- Image requests must use block_type=image.
+- Reconstruction requests must use block_type=video.
 - block_id values must be unique and anchor_block_id must match the eventual evidence text block id format: event-<event_id>.
 """.strip()
 
@@ -255,12 +257,10 @@ Optional context notes:
 {{{CONTEXT_PLAN_STATE}}}
 
 Rules:
- - Always create one timeline block first with id timeline-overview.
- - The timeline block must include merged evidence citations from the events it summarizes.
- - Then create one evidence text block per event with id format event-<event_id>.
-- Context notes must become separate text blocks with provenance=public_context and id format context-<index> based on note order.
-- Evidence blocks must use only evidence citations.
-- Public-context blocks must use only public_context citations.
+ - Create one evidence text block per event with id format event-<event_id>.
+ - Context notes must become separate text blocks with provenance=public_context and id format context-<index> based on note order.
+ - Evidence blocks must use only evidence citations.
+ - Public-context blocks must use only public_context citations.
 - Blocks must already be sorted by sort_key.
 - Do not create image or video blocks here. Media is attached later by the backend.
 """.strip()

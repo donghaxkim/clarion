@@ -249,32 +249,14 @@ class HeuristicReportingPipeline:
         context_notes: list[ContextNote],
     ) -> list[ComposedBlockDraft]:
         blocks: list[ComposedBlockDraft] = []
-        timeline_lines = []
         for event in timeline.timeline_events:
-            label = f"{event.timestamp_label}: " if event.timestamp_label else ""
-            timeline_lines.append(f"{label}{event.title}")
-
-        blocks.append(
-            ComposedBlockDraft(
-                id="timeline-overview",
-                type=ReportBlockType.timeline,
-                title="Chronological Overview",
-                content="\n".join(timeline_lines),
-                sort_key="0000",
-                provenance=ReportProvenance.evidence,
-                confidence_score=0.82,
-                citations=_merge_citations([event.citations for event in timeline.timeline_events]),
-            )
-        )
-
-        for index, event in enumerate(timeline.timeline_events, start=1):
             blocks.append(
                 ComposedBlockDraft(
                     id=f"event-{event.event_id}",
                     type=ReportBlockType.text,
                     title=event.title,
                     content=event.narrative,
-                    sort_key=f"{index:04d}",
+                    sort_key=event.sort_key,
                     provenance=ReportProvenance.evidence,
                     confidence_score=event.confidence_score or 0.7,
                     citations=event.citations,
@@ -349,15 +331,6 @@ class HeuristicReportingPipeline:
 
 def _citation_from_evidence(evidence_id: str) -> Citation:
     return Citation(source_id=evidence_id, provenance=ReportProvenance.evidence)
-
-
-def _merge_citations(citation_groups: list[list[Citation]]) -> list[Citation]:
-    deduped: dict[tuple[str, str], Citation] = {}
-    for citations in citation_groups:
-        for citation in citations:
-            key = (citation.source_id, citation.provenance.value)
-            deduped[key] = citation
-    return list(deduped.values())
 
 
 async def _emit_progress(

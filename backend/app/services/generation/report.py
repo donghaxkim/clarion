@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.agents.reporting.progress import PipelinePreviewSnapshot
-from app.agents.reporting.types import ComposedBlockDraft, MediaRequest, PipelineResult
+from app.agents.reporting.types import (
+    ComposedBlockDraft,
+    MediaPlan,
+    MediaRequest,
+    PipelineResult,
+)
 from app.models import (
     MediaAsset,
     ReportBlock,
@@ -16,9 +21,13 @@ from app.models import (
 
 
 def create_initial_report(report_id: str, draft: PipelineResult) -> ReportDocument:
-    blocks = [_draft_to_block(block) for block in draft.blocks]
-    blocks.extend(_media_request_to_block(request) for request in draft.image_requests)
-    blocks.extend(_media_request_to_block(request) for request in draft.reconstruction_requests)
+    normalized_draft = _normalize_pipeline_result(draft)
+    blocks = [_draft_to_block(block) for block in normalized_draft.blocks]
+    blocks.extend(_media_request_to_block(request) for request in normalized_draft.image_requests)
+    blocks.extend(
+        _media_request_to_block(request)
+        for request in normalized_draft.reconstruction_requests
+    )
     blocks.sort(key=lambda block: block.sort_key)
     return ReportDocument(
         report_id=report_id,
@@ -35,6 +44,7 @@ def create_preview_report(
     snapshot: PipelinePreviewSnapshot,
     warnings: list[str] | None = None,
 ) -> ReportDocument:
+    media_plan = _normalize_media_plan(snapshot.media_plan)
     blocks: list[ReportBlock] = []
 
     if snapshot.composer_output is not None:
@@ -43,11 +53,11 @@ def create_preview_report(
         blocks.extend(_timeline_plan_to_preview_blocks(snapshot.timeline_plan))
         blocks.extend(_context_plan_to_preview_blocks(snapshot.context_plan))
 
-    if snapshot.media_plan is not None:
-        blocks.extend(_media_request_to_block(request) for request in snapshot.media_plan.image_requests)
+    if media_plan is not None:
+        blocks.extend(_media_request_to_block(request) for request in media_plan.image_requests)
         blocks.extend(
             _media_request_to_block(request)
-            for request in snapshot.media_plan.reconstruction_requests
+            for request in media_plan.reconstruction_requests
         )
 
     blocks.sort(key=lambda block: block.sort_key)
@@ -134,31 +144,7 @@ def _media_request_to_block(request: MediaRequest) -> ReportBlock:
 
 
 def _timeline_plan_to_preview_blocks(snapshot) -> list[ReportBlock]:
-    timeline_lines = []
-    for event in snapshot.timeline_events:
-        label = f"{event.timestamp_label}: " if event.timestamp_label else ""
-        timeline_lines.append(f"{label}{event.title}")
-
-    blocks = [
-        ReportBlock(
-            id="timeline-overview",
-            type=ReportBlockType.timeline,
-            title="Chronological Overview",
-            content="\n".join(timeline_lines),
-            sort_key="0000",
-            provenance=ReportProvenance.evidence,
-            confidence_score=max(
-                [event.confidence_score for event in snapshot.timeline_events],
-                default=0.72,
-            ),
-            citations=_merge_citations(
-                [event.citations for event in snapshot.timeline_events]
-            ),
-            media=[],
-            state=ReportBlockState.pending,
-        )
-    ]
-
+    blocks = []
     for event in snapshot.timeline_events:
         blocks.append(
             ReportBlock(
@@ -198,10 +184,15 @@ def _context_plan_to_preview_blocks(snapshot) -> list[ReportBlock]:
     ]
 
 
-def _merge_citations(citation_groups: list[list]) -> list:
-    deduped: dict[tuple[str, str], object] = {}
-    for citations in citation_groups:
-        for citation in citations:
-            key = (citation.source_id, citation.provenance.value)
-            deduped[key] = citation
-    return list(deduped.values())
+def _normalize_pipeline_result(draft: PipelineResult | object) -> PipelineResult:
+    if isinstance(draft, PipelineResult):
+        return PipelineResult.model_validate(draft.model_dump(mode="json"))
+    return PipelineResult.model_validate(draft)
+
+
+def _normalize_media_plan(media_plan: MediaPlan | object | None) -> MediaPlan | None:
+    if media_plan is None:
+        return None
+    if isinstance(media_plan, MediaPlan):
+        return MediaPlan.model_validate(media_plan.model_dump(mode="json"))
+    return MediaPlan.model_validate(media_plan)

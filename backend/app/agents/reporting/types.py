@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models import Citation, ReportBlockType, ReportProvenance
 
@@ -72,6 +72,18 @@ class MediaPlan(BaseModel):
     image_requests: list[MediaRequest] = Field(default_factory=list)
     reconstruction_requests: list[MediaRequest] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def normalize_block_types(self) -> MediaPlan:
+        self.image_requests = _normalize_media_requests(
+            self.image_requests,
+            block_type=ReportBlockType.image,
+        )
+        self.reconstruction_requests = _normalize_media_requests(
+            self.reconstruction_requests,
+            block_type=ReportBlockType.video,
+        )
+        return self
+
 
 class ComposedBlockDraft(BaseModel):
     id: str = Field(min_length=1)
@@ -93,3 +105,29 @@ class PipelineResult(BaseModel):
     image_requests: list[MediaRequest] = Field(default_factory=list)
     reconstruction_requests: list[MediaRequest] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_block_types(self) -> PipelineResult:
+        self.image_requests = _normalize_media_requests(
+            self.image_requests,
+            block_type=ReportBlockType.image,
+        )
+        self.reconstruction_requests = _normalize_media_requests(
+            self.reconstruction_requests,
+            block_type=ReportBlockType.video,
+        )
+        return self
+
+
+def _normalize_media_requests(
+    requests: list[MediaRequest],
+    *,
+    block_type: ReportBlockType,
+) -> list[MediaRequest]:
+    normalized: list[MediaRequest] = []
+    for request in requests:
+        if request.block_type == block_type:
+            normalized.append(request)
+            continue
+        normalized.append(request.model_copy(update={"block_type": block_type}))
+    return normalized

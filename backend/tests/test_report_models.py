@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.agents.reporting.types import ComposerOutput, MediaPlan, TimelinePlan
+from app.agents.reporting.types import ComposerOutput, MediaPlan, PipelineResult, TimelinePlan
 from app.agents.reporting.validators import normalize_composer_output, validate_composer_output
 from app.models import (
     CaseEvidenceBundle,
@@ -57,7 +57,7 @@ def test_adk_can_build_output_schema_tools_for_reporting_models():
     assert SetModelResponseTool(ComposerOutput)._get_declaration() is not None
 
 
-def test_composer_output_normalization_backfills_timeline_and_event_citations():
+def test_composer_output_normalization_backfills_event_citations():
     citation = Citation(source_id="ev-1", provenance=ReportProvenance.evidence)
     timeline = TimelinePlan(
         timeline_events=[
@@ -73,16 +73,6 @@ def test_composer_output_normalization_backfills_timeline_and_event_citations():
     )
     output = ComposerOutput(
         blocks=[
-            {
-                "id": "timeline-001",
-                "type": ReportBlockType.timeline,
-                "title": "Chronology",
-                "content": "Impact",
-                "sort_key": "0000",
-                "provenance": ReportProvenance.evidence,
-                "confidence_score": 0.9,
-                "citations": [],
-            },
             {
                 "id": "event-impact",
                 "type": ReportBlockType.text,
@@ -100,7 +90,6 @@ def test_composer_output_normalization_backfills_timeline_and_event_citations():
 
     assert not validate_composer_output(normalized)
     assert normalized.blocks[0].citations[0].source_id == "ev-1"
-    assert normalized.blocks[1].citations[0].source_id == "ev-1"
 
 
 def test_composer_output_normalization_sorts_blocks_by_sort_key():
@@ -130,10 +119,10 @@ def test_composer_output_normalization_sorts_blocks_by_sort_key():
                 "citations": [citation.model_dump(mode="json")],
             },
             {
-                "id": "timeline-overview",
-                "type": ReportBlockType.timeline,
-                "title": "Chronology",
-                "content": "Impact",
+                "id": "event-approach",
+                "type": ReportBlockType.text,
+                "title": "Approach",
+                "content": "Vehicles approach the intersection.",
                 "sort_key": "0000",
                 "provenance": ReportProvenance.evidence,
                 "confidence_score": 0.9,
@@ -146,9 +135,62 @@ def test_composer_output_normalization_sorts_blocks_by_sort_key():
 
     assert not validate_composer_output(normalized)
     assert [block.id for block in normalized.blocks] == [
-        "timeline-overview",
+        "event-approach",
         "event-impact",
     ]
+
+
+def test_media_plan_normalizes_request_block_types():
+    media_plan = MediaPlan(
+        image_requests=[
+            {
+                "block_id": "event-impact-image",
+                "block_type": ReportBlockType.text,
+                "anchor_block_id": "event-impact",
+                "title": "Impact Still",
+                "sort_key": "0001.10",
+            }
+        ],
+        reconstruction_requests=[
+            {
+                "block_id": "event-impact-video",
+                "block_type": ReportBlockType.text,
+                "anchor_block_id": "event-impact",
+                "title": "Impact Reconstruction",
+                "sort_key": "0001.20",
+            }
+        ],
+    )
+
+    assert media_plan.image_requests[0].block_type == ReportBlockType.image
+    assert media_plan.reconstruction_requests[0].block_type == ReportBlockType.video
+
+
+def test_pipeline_result_normalizes_request_block_types():
+    result = PipelineResult(
+        blocks=[],
+        image_requests=[
+            {
+                "block_id": "event-impact-image",
+                "block_type": ReportBlockType.text,
+                "anchor_block_id": "event-impact",
+                "title": "Impact Still",
+                "sort_key": "0001.10",
+            }
+        ],
+        reconstruction_requests=[
+            {
+                "block_id": "event-impact-video",
+                "block_type": ReportBlockType.text,
+                "anchor_block_id": "event-impact",
+                "title": "Impact Reconstruction",
+                "sort_key": "0001.20",
+            }
+        ],
+    )
+
+    assert result.image_requests[0].block_type == ReportBlockType.image
+    assert result.reconstruction_requests[0].block_type == ReportBlockType.video
 
 
 def test_report_document_and_request_models_validate():
@@ -184,3 +226,18 @@ def test_report_document_and_request_models_validate():
         warnings=[],
     )
     assert report.sections[0].citations[0].source_id == "ev-1"
+
+
+def test_report_block_rejects_removed_timeline_type():
+    with pytest.raises(ValidationError):
+        ReportBlock(
+            id="block-1",
+            type="timeline",
+            title="Legacy Timeline",
+            content="Removed block type.",
+            sort_key="0001",
+            provenance=ReportProvenance.evidence,
+            confidence_score=0.8,
+            citations=[],
+            state=ReportBlockState.ready,
+        )

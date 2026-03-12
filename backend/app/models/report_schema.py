@@ -22,7 +22,6 @@ class ReportBlockType(str, Enum):
     text = "text"
     image = "image"
     video = "video"
-    timeline = "timeline"
 
 
 class ReportProvenance(str, Enum):

@@ -46,8 +46,6 @@ export function formatGeneratedAt(value?: string | null): string | null {
 
 export function formatBlockType(type: ReportBlockType): string {
   switch (type) {
-    case "timeline":
-      return "Timeline";
     case "image":
       return "Image";
     case "video":
