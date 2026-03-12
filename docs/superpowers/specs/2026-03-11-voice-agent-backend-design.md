@@ -45,8 +45,8 @@ backend/app/
 
 The WebSocket endpoint. Accepts a connection, looks up the case, creates a `GeminiVoiceSession`, and runs two concurrent loops:
 
-- **Upstream loop**: reads audio/events from frontend, forwards to Gemini.
-- **Downstream loop**: reads audio/tool-calls from Gemini, forwards to frontend.
+- **Upstream loop**: reads audio/events from frontend, forwards to Gemini. On `audio_start`, sends `{ "type": "state", "value": "listening" }` back to frontend. On `audio_end`, signals end-of-turn to Gemini and sends `{ "type": "state", "value": "thinking" }`.
+- **Downstream loop**: reads audio/tool-calls from Gemini, forwards to frontend. Sends `{ "type": "state", "value": "speaking" }` when audio starts arriving, `{ "type": "state", "value": "idle" }` when Gemini finishes.
 
 ### session.py (GeminiVoiceSession)
 
@@ -66,7 +66,7 @@ Reads the in-memory case data and builds a system prompt. Re-builds context when
 Defines Gemini function-calling tools and their execution logic:
 
 - `navigate_to(target, id)` — tells frontend to scroll to a contradiction, entity, report section, or evidence item.
-- `edit_section(section_id, instruction)` — calls the existing `/api/case/{id}/edit-section` endpoint internally.
+- `edit_section(section_id, instruction)` — calls the edit-section handler directly as a Python function call (not an HTTP request to itself).
 - `query_evidence(evidence_id)` — retrieves detailed evidence content to answer specific questions.
 - `get_entity_detail(entity_name)` — pulls entity facts and contradictions.
 
@@ -115,7 +115,7 @@ Defines Gemini function-calling tools and their execution logic:
 { "type": "error", "message": "..." }
 ```
 
-**Audio format:** 16-bit PCM, 16kHz mono. Base64 encoded over the WebSocket.
+**Audio format:** 16-bit PCM, 16kHz mono, little-endian. MIME type: `audio/pcm;rate=16000`. Base64 encoded over the WebSocket.
 
 ## Gemini Live API Integration
 
@@ -154,49 +154,75 @@ on screen while you explain.
 
 ### Tool Declarations
 
+Uses the `google-genai` SDK types. The JSON below is conceptual — implementation uses `types.FunctionDeclaration` and `types.Tool` wrappers.
+
+**Model:** `gemini-2.0-flash-live-001` (or latest live-capable model).
+
 ```python
-tools = [
-    {
-        "name": "navigate_to",
-        "description": "Navigate the user's screen to a specific item",
-        "parameters": {
-            "target": {
-                "type": "string",
-                "enum": ["contradiction", "entity", "section", "evidence"]
-            },
-            "id": {
-                "type": "string",
-                "description": "The ID of the item to navigate to"
-            }
-        }
-    },
-    {
-        "name": "edit_section",
-        "description": "Edit a report section with a natural language instruction",
-        "parameters": {
-            "section_id": { "type": "string" },
-            "instruction": {
-                "type": "string",
-                "description": "What to change about this section"
-            }
-        }
-    },
-    {
-        "name": "query_evidence",
-        "description": "Get the full parsed content of an evidence file",
-        "parameters": {
-            "evidence_id": { "type": "string" }
-        }
-    },
-    {
-        "name": "get_entity_detail",
-        "description": "Get all facts and contradictions for a specific entity",
-        "parameters": {
-            "entity_name": { "type": "string" }
-        }
-    }
-]
+from google.genai import types
+
+voice_tools = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="navigate_to",
+            description="Navigate the user's screen to a specific item",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "target": types.Schema(
+                        type="STRING",
+                        enum=["contradiction", "entity", "section", "evidence"],
+                    ),
+                    "id": types.Schema(
+                        type="STRING",
+                        description="The ID of the item to navigate to",
+                    ),
+                },
+                required=["target", "id"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="edit_section",
+            description="Edit a report section with a natural language instruction",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "section_id": types.Schema(type="STRING"),
+                    "instruction": types.Schema(
+                        type="STRING",
+                        description="What to change about this section",
+                    ),
+                },
+                required=["section_id", "instruction"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="query_evidence",
+            description="Get the full parsed content of an evidence file (truncated to 2000 chars)",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "evidence_id": types.Schema(type="STRING"),
+                },
+                required=["evidence_id"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="get_entity_detail",
+            description="Get all facts and contradictions for a specific entity",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "entity_name": types.Schema(type="STRING"),
+                },
+                required=["entity_name"],
+            ),
+        ),
+    ]
+)
 ```
+
+**Note:** `case_id` is not a tool parameter — it is captured from the WebSocket path and passed to the tool executor as closure context.
 
 ### Tool Call Flow
 
@@ -211,14 +237,15 @@ When Gemini makes a tool call, the backend:
 ### When does the agent get case context?
 
 - **On WebSocket connect** — backend loads current case state and builds the system prompt. If the case is still in `intake` or `parsing`, the agent knows limited info and tells the user analysis isn't ready yet.
-- **On `context_update` from frontend** — when the report finishes streaming, frontend sends `{ "type": "context_update" }`. Backend rebuilds the system prompt with the full report, contradictions, and entities, then updates the Gemini session.
+- **On `context_update` from frontend** — when the report finishes streaming, frontend sends `{ "type": "context_update" }`. Backend tears down the current Gemini session and opens a new one with updated system instructions and full case context. Conversation history is lost on reconnect — this is acceptable since the context update represents a major state change (report completed).
 
 ### Session lifecycle
 
 1. **Connect** — one Gemini Live API session per WebSocket connection. No persistent sessions across page reloads.
 2. **Conversation memory** — Gemini Live API maintains conversation history within the session, so the user can reference prior exchanges.
 3. **Disconnect** — when the user navigates away or closes the tab, WebSocket closes, backend tears down the Gemini session.
-4. **Timeout** — if no audio is sent for 5 minutes, backend sends a keepalive ping. If the Gemini session expires (~15 min idle), backend reconnects transparently and re-injects context.
+4. **Session duration limit** — Gemini Live API sessions have a hard limit of ~10 minutes total (not idle — total). The backend must proactively reconnect before hitting this wall. At ~9 minutes, the backend tears down and creates a new session with the same system instructions, then sends `{ "type": "state", "value": "idle" }` to frontend. Conversation history is lost on reconnect.
+5. **Concurrent loops** — upstream and downstream loops run via `asyncio.TaskGroup`. If either loop crashes, the other is cancelled and the WebSocket is closed cleanly.
 
 ### Error handling
 
@@ -237,7 +264,7 @@ google-genai           # Gemini Live API client (supports WebSocket streaming)
 ### Environment variables
 
 ```
-GEMINI_API_KEY=...     # Already exists — Gemini Live API uses the same key
+GOOGLE_API_KEY=...     # Already exists in codebase (used by gemini_client.py) — same key for Live API
 ```
 
 No new infrastructure. The voice backend runs inside the same FastAPI process.
