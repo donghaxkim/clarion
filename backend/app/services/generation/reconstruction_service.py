@@ -44,7 +44,9 @@ class ReconstructionMediaService:
             scene_description=scene_description,
             evidence_refs=evidence_refs,
             reference_image_uris=reference_image_uris[:3],
-            quality_mode=QualityMode.fast_then_final,
+            duration_sec=4,
+            # quality_mode=QualityMode.fast_then_final,
+            quality_mode=QualityMode.fast_only,
         )
         job = self.job_store.create_job()
         await self.orchestrator.run_job(job.job_id, payload)
