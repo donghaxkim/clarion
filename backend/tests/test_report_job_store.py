@@ -85,5 +85,8 @@ def test_job_store_round_trips_request_payload_and_claims_once(tmp_path):
     assert request_uri.endswith(f"/report-jobs/{job.job_id}/request.json")
     assert loaded.user_id == "user-1"
     assert loaded.bundle.case_id == "case-1"
+    report_request = store.get_request_for_report("report-3")
+    assert report_request is not None
+    assert report_request.bundle.case_id == "case-1"
     assert store.claim_job(job.job_id) is True
     assert store.claim_job(job.job_id) is False

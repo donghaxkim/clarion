@@ -1,10 +1,123 @@
-# POST /upload endpoint
-from fastapi import APIRouter, UploadFile
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from app.models.schema import new_id
+from app.services.case_service import case_workspace_service
 
 router = APIRouter()
+
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/clarion-uploads")
+Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/")
 async def upload_files(files: list[UploadFile]):
     # TODO: store in GCS, return document IDs
     return {"uploaded": [f.filename for f in files]}
+
+
+@router.post("/cases/{case_id}")
+async def upload_case_files(
+    case_id: str,
+    files: list[UploadFile] = File(...),
+):
+    if case_workspace_service.get_case_record(case_id) is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_workspace_service.mark_upload_started(case_id)
+    parsed_results: list[dict[str, object]] = []
+    pending_videos: list[dict[str, object]] = []
+
+    try:
+        for file in files:
+            local_path, media_url = await _save_upload(file)
+            filename = file.filename or "unknown"
+            file_type = _detect_file_type(filename)
+
+            if file_type == "video":
+                pending = {
+                    "filename": filename,
+                    "local_path": local_path,
+                    "media_url": media_url,
+                    "file_type": "video",
+                    "status": "pending_video_analysis",
+                }
+                case_workspace_service.add_pending_video(case_id, pending)
+                pending_videos.append(pending)
+                continue
+
+            try:
+                evidence = _parse_evidence(local_path, filename, media_url)
+                if evidence is None:
+                    parsed_results.append(
+                        {
+                            "filename": filename,
+                            "status": "parse_failed",
+                            "error": "Could not parse file",
+                        }
+                    )
+                    continue
+
+                case_workspace_service.attach_evidence(case_id, evidence)
+                parsed_results.append(
+                    {
+                        "evidence_id": evidence.id,
+                        "filename": evidence.filename,
+                        "evidence_type": getattr(
+                            evidence.evidence_type,
+                            "value",
+                            evidence.evidence_type,
+                        ),
+                        "labels": list(evidence.labels),
+                        "summary": evidence.summary,
+                        "entity_count": len(evidence.entities),
+                        "entities": [
+                            {"type": entity.type, "name": entity.name}
+                            for entity in evidence.entities
+                        ],
+                        "status": "parsed",
+                    }
+                )
+            except Exception as exc:
+                parsed_results.append(
+                    {
+                        "filename": filename,
+                        "status": "parse_failed",
+                        "error": str(exc),
+                    }
+                )
+    finally:
+        case_workspace_service.mark_upload_finished(case_id)
+
+    record = case_workspace_service.require_case_record(case_id)
+    return {
+        "case_id": case_id,
+        "parsed": parsed_results,
+        "video_pending": pending_videos,
+        "total_evidence": len(record.case.evidence),
+        "total_entities": len(record.case.entities),
+    }
+
+
+async def _save_upload(file: UploadFile) -> tuple[str, str]:
+    file_id = new_id()
+    filename = file.filename or f"upload_{file_id}"
+    local_path = os.path.join(UPLOAD_DIR, f"{file_id}_{filename}")
+    Path(local_path).write_bytes(await file.read())
+    return local_path, f"file://{local_path}"
+
+
+def _detect_file_type(filename: str) -> str:
+    from app.services.parser.labeler import detect_file_type
+
+    return detect_file_type(filename)
+
+
+def _parse_evidence(local_path: str, filename: str, media_url: str):
+    from app.services.parser.labeler import parse_evidence
+
+    return parse_evidence(local_path, filename, media_url)

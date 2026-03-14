@@ -37,6 +37,8 @@ class ReportJobBackend(Protocol):
 
     def get_report(self, report_id: str) -> ReportDocument | None: ...
 
+    def get_request_for_report(self, report_id: str) -> GenerateReportRequest | None: ...
+
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]: ...
 
     def publish(
@@ -110,6 +112,9 @@ class ReportJobStore:
 
     def get_report(self, report_id: str) -> ReportDocument | None:
         return self._get_backend().get_report(report_id)
+
+    def get_request_for_report(self, report_id: str) -> GenerateReportRequest | None:
+        return self._get_backend().get_request_for_report(report_id)
 
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]:
         return self._get_backend().get_events_since(job_id, event_id)
@@ -253,6 +258,20 @@ class FirestoreReportJobBackend:
         if not report_gcs_uri:
             return None
         return self._load_report(report_gcs_uri)
+
+    def get_request_for_report(self, report_id: str) -> GenerateReportRequest | None:
+        client = self._get_client()
+        snapshot = self._report_ref(client, report_id).get()
+        if not snapshot.exists:
+            return None
+        doc = snapshot.to_dict() or {}
+        job_id = doc.get("job_id")
+        if not job_id:
+            return None
+        try:
+            return self.load_request(job_id)
+        except Exception:
+            return None
 
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]:
         client = self._get_client()
@@ -586,6 +605,19 @@ class InMemoryReportJobBackend:
         if not report_gcs_uri:
             return None
         return ReportDocument.model_validate(self.blob_store.download_json(report_gcs_uri))
+
+    def get_request_for_report(self, report_id: str) -> GenerateReportRequest | None:
+        with self._lock:
+            report_doc = dict(self.reports.get(report_id) or {})
+        if not report_doc:
+            return None
+        job_id = report_doc.get("job_id")
+        if not job_id:
+            return None
+        try:
+            return self.load_request(job_id)
+        except Exception:
+            return None
 
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]:
         with self._lock:

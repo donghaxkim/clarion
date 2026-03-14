@@ -1,43 +1,63 @@
-"""Tests for voice tool declarations and execution."""
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from app.services.voice.tools import get_tool_declarations, execute_tool
-from app.models.schema import (
-    CaseFile, EvidenceItem, ExtractedContent, MediaRef,
-    Entity, SourceLocation, Contradiction, SourcePin,
-    ReportSection,
+from app.services.voice.models import (
+    VoiceContradiction,
+    VoiceEntity,
+    VoiceEvidence,
+    VoiceMention,
+    VoiceReportSection,
+    VoiceSessionContext,
 )
+from app.services.voice.tools import execute_tool, get_tool_declarations
 
 
-def _make_case() -> CaseFile:
-    case = CaseFile(title="Smith v. Johnson", case_type="personal_injury", status="complete")
-    case.evidence.append(
-        EvidenceItem(
-            id="ev_001",
-            filename="police_report.pdf",
-            evidence_type="police_report",
-            media=MediaRef(url="file:///tmp/police.pdf", media_type="application/pdf"),
-            content=ExtractedContent(text="Officer observed rear-end damage to plaintiff vehicle."),
-            summary="Police report",
-        )
+def _make_context() -> VoiceSessionContext:
+    return VoiceSessionContext(
+        report_id="report-1",
+        case_id="case-1",
+        title="Smith v. Johnson",
+        case_type="personal_injury",
+        status="completed",
+        evidence=[
+            VoiceEvidence(
+                evidence_id="ev_001",
+                filename="police_report.pdf",
+                evidence_type="police_report",
+                summary="Police report",
+                content_text="Officer observed rear-end damage to plaintiff vehicle.",
+                media_url="file:///tmp/police.pdf",
+            )
+        ],
+        entities=[
+            VoiceEntity(
+                entity_id="ent_001",
+                entity_type="person",
+                name="John Smith",
+                mentions=[
+                    VoiceMention(
+                        evidence_id="ev_001",
+                        page=1,
+                        excerpt="John Smith",
+                    )
+                ],
+            )
+        ],
+        contradictions=[
+            VoiceContradiction(
+                contradiction_id="c_001",
+                severity="high",
+                description="Speed disputed - John Smith",
+                fact_a="John Smith says 25 mph",
+                fact_b="Police report says 40 mph",
+            )
+        ],
+        sections=[
+            VoiceReportSection(
+                section_id="s_001",
+                kind="text",
+                title="Collision Summary",
+                text="Original text",
+            )
+        ],
     )
-    case.entities.append(
-        Entity(id="ent_001", type="person", name="John Smith", mentions=[
-            SourceLocation(evidence_id="ev_001", page=1, excerpt="John Smith"),
-        ])
-    )
-    case.contradictions.append(
-        Contradiction(
-            id="c_001", severity="high",
-            description="Speed disputed — John Smith",
-            source_a=SourcePin(evidence_id="ev_001", detail="p2"),
-            source_b=SourcePin(evidence_id="ev_002", detail="p1"),
-            fact_a="25 mph", fact_b="40 mph",
-        )
-    )
-    return case
 
 
 def test_get_tool_declarations_returns_tool():
@@ -47,56 +67,73 @@ def test_get_tool_declarations_returns_tool():
 
 
 def test_execute_navigate_to():
-    case = _make_case()
+    context = _make_context()
     result, frontend_event = execute_tool(
-        "navigate_to", {"target": "contradiction", "id": "c_001"}, case
+        "navigate_to",
+        {"target": "contradiction", "id": "c_001"},
+        context,
     )
-    assert frontend_event["type"] == "navigate"
-    assert frontend_event["target"] == "contradiction"
-    assert frontend_event["id"] == "c_001"
+    assert "Navigated to contradiction c_001" in result
+    assert frontend_event == {
+        "type": "navigate",
+        "target": "contradiction",
+        "id": "c_001",
+    }
 
 
 def test_execute_query_evidence():
-    case = _make_case()
+    context = _make_context()
     result, frontend_event = execute_tool(
-        "query_evidence", {"evidence_id": "ev_001"}, case
+        "query_evidence",
+        {"evidence_id": "ev_001"},
+        context,
     )
     assert "Officer observed" in result
     assert frontend_event is None
 
 
 def test_execute_query_evidence_not_found():
-    case = _make_case()
+    context = _make_context()
     result, frontend_event = execute_tool(
-        "query_evidence", {"evidence_id": "nonexistent"}, case
+        "query_evidence",
+        {"evidence_id": "nonexistent"},
+        context,
     )
     assert "not found" in result.lower()
+    assert frontend_event is None
 
 
 def test_execute_get_entity_detail():
-    case = _make_case()
+    context = _make_context()
     result, frontend_event = execute_tool(
-        "get_entity_detail", {"entity_name": "John Smith"}, case
+        "get_entity_detail",
+        {"entity_name": "John Smith"},
+        context,
     )
     assert "John Smith" in result
     assert "person" in result
+    assert "Contradictions: 1" in result
+    assert frontend_event is None
 
 
 def test_execute_get_entity_detail_case_insensitive():
-    case = _make_case()
+    context = _make_context()
     result, _ = execute_tool(
-        "get_entity_detail", {"entity_name": "john smith"}, case
+        "get_entity_detail",
+        {"entity_name": "john smith"},
+        context,
     )
     assert "John Smith" in result
 
 
 def test_execute_edit_section():
-    case = _make_case()
-    case.report_sections.append(
-        ReportSection(id="s_001", block_type="text", order=0, text="Original text")
-    )
+    context = _make_context()
     result, frontend_event = execute_tool(
-        "edit_section", {"section_id": "s_001", "instruction": "make it shorter"}, case
+        "edit_section",
+        {"section_id": "s_001", "instruction": "make it shorter"},
+        context,
     )
+    assert "Edit request submitted" in result
     assert frontend_event["type"] == "edit_result"
     assert frontend_event["section_id"] == "s_001"
+    assert frontend_event["status"] == "success"
