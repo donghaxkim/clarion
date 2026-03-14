@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
-from uuid import uuid4
 
-from app.config import GEMINI_API_KEY, LOCAL_ARTIFACTS_DIR, VERTEX_LOCATION, VERTEX_PROJECT_ID
+from app.config import GEMINI_API_KEY, VERTEX_LOCATION, VERTEX_PROJECT_ID
 from app.utils.storage import download_file
 
 
@@ -272,14 +271,10 @@ def _try_download_with_sdk(*, client: Any, video_obj: Any, uri: Any) -> bytes | 
 
 def _download_from_uri(uri: str) -> bytes:
     if uri.startswith("gs://"):
-        scratch_dir = Path(LOCAL_ARTIFACTS_DIR) / "veo-downloads" / uuid4().hex
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-        path = scratch_dir / "veo_output.mp4"
-        try:
+        with tempfile.TemporaryDirectory(prefix="clarion-veo-") as scratch_dir:
+            path = Path(scratch_dir) / "veo_output.mp4"
             download_file(uri, str(path))
             return path.read_bytes()
-        finally:
-            shutil.rmtree(scratch_dir, ignore_errors=True)
     if uri.startswith(("http://", "https://")):
         with urlopen(uri, timeout=120) as response:
             return response.read()

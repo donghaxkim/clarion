@@ -37,8 +37,18 @@ ProgressCallback = Callable[[PipelineProgressEvent], Awaitable[None] | None]
 
 
 class HeuristicReportingPipeline:
-    def __init__(self, policy: ReportGenerationPolicy):
+    DEFAULT_WARNING_MESSAGE = (
+        "ADK runtime unavailable or not configured; used deterministic fallback pipeline."
+    )
+
+    def __init__(
+        self,
+        policy: ReportGenerationPolicy,
+        *,
+        warning_message: str | None = None,
+    ):
         self.policy = policy
+        self.warning_message = warning_message or self.DEFAULT_WARNING_MESSAGE
 
     async def run(
         self,
@@ -159,9 +169,7 @@ class HeuristicReportingPipeline:
             blocks=blocks,
             image_requests=image_requests,
             reconstruction_requests=reconstruction_requests,
-            warnings=[
-                "ADK runtime unavailable or not configured; used deterministic fallback pipeline."
-            ],
+            warnings=[self.warning_message],
         )
 
     def _build_timeline(self, bundle: CaseEvidenceBundle) -> TimelinePlan:

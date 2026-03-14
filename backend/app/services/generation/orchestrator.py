@@ -5,7 +5,11 @@ import json
 from datetime import UTC, datetime
 from typing import Callable
 
-from app.agents.reporting import build_reporting_pipeline
+from app.agents.reporting import (
+    AdkReportingPipeline,
+    HeuristicReportingPipeline,
+    build_reporting_pipeline,
+)
 from app.agents.reporting.progress import (
     NODE_IMAGE_GENERATOR,
     NODE_RECONSTRUCTION_GENERATOR,
@@ -352,7 +356,13 @@ class ReportGenerationOrchestrator:
         }
         if "progress_callback" in run_signature.parameters:
             kwargs["progress_callback"] = progress_callback
-        return await pipeline.run(**kwargs)
+        try:
+            return await pipeline.run(**kwargs)
+        except Exception as exc:
+            fallback_pipeline = _build_reporting_fallback_pipeline(pipeline, exc)
+            if fallback_pipeline is None:
+                raise
+            return await fallback_pipeline.run(**kwargs)
 
     async def _publish_pipeline_progress(
         self,
@@ -481,3 +491,19 @@ def _normalize_pipeline_result(draft: PipelineResult | object) -> PipelineResult
     if isinstance(draft, PipelineResult):
         return PipelineResult.model_validate(draft.model_dump(mode="json"))
     return PipelineResult.model_validate(draft)
+
+
+def _build_reporting_fallback_pipeline(
+    pipeline: object,
+    exc: Exception,
+) -> HeuristicReportingPipeline | None:
+    if not isinstance(pipeline, AdkReportingPipeline):
+        return None
+
+    return HeuristicReportingPipeline(
+        policy=pipeline.policy,
+        warning_message=(
+            "ADK reporting pipeline failed; used deterministic fallback pipeline. "
+            f"Original error: {exc}"
+        ),
+    )

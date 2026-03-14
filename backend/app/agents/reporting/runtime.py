@@ -29,7 +29,6 @@ from app.agents.reporting.types import (
 )
 from app.agents.reporting.validators import normalize_composer_output
 from app.config import (
-    GCS_ALLOW_LOCAL_FALLBACK,
     GCS_BUCKET,
     GOOGLE_API_KEY,
     REPORT_CONTEXT_CACHE_ENABLED,
@@ -82,7 +81,7 @@ class AdkReportingPipeline:
         session_service = InMemorySessionService()
         artifact_service = (
             InMemoryArtifactService()
-            if GCS_ALLOW_LOCAL_FALLBACK or not GCS_BUCKET
+            if not GCS_BUCKET
             else GcsArtifactService(bucket_name=GCS_BUCKET)
         )
 

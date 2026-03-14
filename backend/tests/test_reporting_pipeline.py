@@ -133,3 +133,21 @@ def test_adk_context_agent_wraps_google_search_for_public_context():
 
     assert search_tool.__class__.__name__ == "GoogleSearchAgentTool"
     assert getattr(search_tool.agent, "model", None) == "gemini-2.5-flash"
+
+
+def test_adk_refiner_agent_avoids_tool_plus_output_schema_combo():
+    pytest.importorskip("google.adk")
+
+    root_agent = build_root_agent(
+        ReportGenerationPolicy(
+            text_model="gemini-3-pro-preview",
+            helper_model="gemini-3-flash-preview",
+            image_model="gemini-3-pro-image-preview",
+            search_model="gemini-2.5-flash",
+            enable_public_context=False,
+        )
+    )
+
+    refiner_agent = root_agent.sub_agents[1].sub_agents[1]
+
+    assert getattr(refiner_agent, "tools", []) == []

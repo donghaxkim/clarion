@@ -17,10 +17,13 @@ from app.routers import generate
 from app.services.generation.job_store import ReportJobStore
 
 
-class _NoopOrchestrator:
-    async def run_job(self, job_id, payload):  # pragma: no cover - scheduled in background
-        del job_id, payload
-        return None
+class _RecordingDispatcher:
+    def __init__(self):
+        self.job_ids: list[str] = []
+
+    def dispatch_report_job(self, job_id: str) -> str:
+        self.job_ids.append(job_id)
+        return f"report-{job_id}"
 
 
 def _payload():
@@ -41,8 +44,9 @@ def _payload():
 
 def test_create_report_job_returns_202(monkeypatch, tmp_path):
     store = ReportJobStore(str(tmp_path / "jobs.json"))
+    dispatcher = _RecordingDispatcher()
     monkeypatch.setattr(generate, "job_store", store)
-    monkeypatch.setattr(generate, "orchestrator", _NoopOrchestrator())
+    monkeypatch.setattr(generate, "dispatcher", dispatcher)
 
     client = TestClient(app)
     response = client.post("/generate/jobs", json=_payload())
@@ -56,12 +60,16 @@ def test_create_report_job_returns_202(monkeypatch, tmp_path):
     assert stored.status == ReportGenerationJobStatus.queued
     assert stored.activity is not None
     assert stored.workflow is not None
+    assert dispatcher.job_ids == [body["job_id"]]
+    saved_request = store.load_request(body["job_id"])
+    assert saved_request.user_id == "user-1"
 
 
 def test_stream_and_report_endpoints_return_job_events(monkeypatch, tmp_path):
     store = ReportJobStore(str(tmp_path / "jobs.json"))
+    dispatcher = _RecordingDispatcher()
     monkeypatch.setattr(generate, "job_store", store)
-    monkeypatch.setattr(generate, "orchestrator", _NoopOrchestrator())
+    monkeypatch.setattr(generate, "dispatcher", dispatcher)
     monkeypatch.setattr(
         generate,
         "materialize_browser_uri",
@@ -150,15 +158,70 @@ def test_stream_and_report_endpoints_return_job_events(monkeypatch, tmp_path):
     )
 
 
-def test_local_artifact_route_serves_local_files_when_enabled(monkeypatch, tmp_path):
-    artifact = tmp_path / "reports/case-router/demo/video.mp4"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_bytes(b"video-bytes")
+def test_report_endpoints_return_500_when_signing_fails(monkeypatch, tmp_path):
+    store = ReportJobStore(str(tmp_path / "jobs.json"))
+    dispatcher = _RecordingDispatcher()
+    monkeypatch.setattr(generate, "job_store", store)
+    monkeypatch.setattr(generate, "dispatcher", dispatcher)
 
-    monkeypatch.setattr(generate, "GCS_ALLOW_LOCAL_FALLBACK", True)
-    monkeypatch.setattr(generate, "LOCAL_ARTIFACTS_DIR", str(tmp_path))
+    def _raise_materialization_error(uri, *, base_url=None):
+        del uri, base_url
+        raise RuntimeError("signing failed")
+
+    monkeypatch.setattr(
+        generate,
+        "materialize_browser_uri",
+        _raise_materialization_error,
+    )
+
+    report = ReportDocument(
+        report_id="report-router",
+        status=ReportStatus.completed,
+        sections=[
+            ReportBlock(
+                id="impact-image",
+                type="image",
+                title="Impact Still",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                citations=[
+                    Citation(
+                        source_id="ev-1",
+                        provenance=ReportProvenance.evidence,
+                        uri="gs://test-bucket/evidence/ev-1.pdf",
+                    )
+                ],
+                media=[
+                    MediaAsset(
+                        kind=MediaAssetKind.image,
+                        uri="gs://test-bucket/reports/report-router/media/impact.png",
+                        generator="gemini-image",
+                        manifest_uri="gs://test-bucket/reports/report-router/media/impact.manifest.json",
+                        state=ReportBlockState.ready,
+                    )
+                ],
+            )
+        ],
+    )
+    job = store.create_job(report=report)
+    store.mark_completed(
+        job.job_id,
+        report=report,
+        artifacts=ReportArtifactRefs(
+            report_gcs_uri="gs://test-bucket/reports/report-router/report.json",
+            report_url="gs://test-bucket/reports/report-router/report.json",
+            manifest_gcs_uri="gs://test-bucket/reports/report-router/manifest.json",
+        ),
+    )
 
     client = TestClient(app)
-    response = client.get("/generate/artifacts/reports/case-router/demo/video.mp4")
-    assert response.status_code == 200
-    assert response.content == b"video-bytes"
+
+    job_response = client.get(f"/generate/jobs/{job.job_id}")
+    assert job_response.status_code == 500
+    assert "Artifact URL signing is unavailable" in job_response.json()["detail"]
+    assert "signing failed" in job_response.json()["detail"]
+
+    report_response = client.get(f"/generate/reports/{report.report_id}")
+    assert report_response.status_code == 500
+    assert "Artifact URL signing is unavailable" in report_response.json()["detail"]
+    assert "signing failed" in report_response.json()["detail"]

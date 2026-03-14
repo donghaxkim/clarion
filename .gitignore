@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .env
 *.egg-info/
+cloudrun.env.yaml
 
 # Node
 node_modules/
@@ -19,3 +20,4 @@ frontend/.next/
 .report_jobs.json
 .tmp_report_jobs.json
 .artifacts/
+plans/

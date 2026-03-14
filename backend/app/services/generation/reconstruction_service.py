@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from app.config import RECONSTRUCTION_JOB_STORE_PATH, VEO_ALLOW_FAKE
+from uuid import uuid4
+
+from app.config import VEO_ALLOW_FAKE
 from app.models import (
     MediaAsset,
     MediaAssetKind,
     QualityMode,
     ReconstructionJobRequest,
-    ReconstructionJobStatus,
     ReportBlockState,
 )
 from app.services.video.reconstruction import (
-    ReconstructionJobStore,
-    ReconstructionOrchestrator,
+    ReconstructionArtifactService,
     VeoClient,
 )
 
@@ -20,12 +20,9 @@ class ReconstructionMediaService:
     def __init__(
         self,
         *,
-        job_store: ReconstructionJobStore | None = None,
-        orchestrator: ReconstructionOrchestrator | None = None,
+        artifact_service: ReconstructionArtifactService | None = None,
     ):
-        self.job_store = job_store or ReconstructionJobStore(path=RECONSTRUCTION_JOB_STORE_PATH)
-        self.orchestrator = orchestrator or ReconstructionOrchestrator(
-            job_store=self.job_store,
+        self.artifact_service = artifact_service or ReconstructionArtifactService(
             veo_client=VeoClient(allow_fake=VEO_ALLOW_FAKE),
         )
 
@@ -45,21 +42,17 @@ class ReconstructionMediaService:
             evidence_refs=evidence_refs,
             reference_image_uris=reference_image_uris[:3],
             duration_sec=4,
-            # quality_mode=QualityMode.fast_then_final,
             quality_mode=QualityMode.fast_only,
         )
-        job = self.job_store.create_job()
-        await self.orchestrator.run_job(job.job_id, payload)
-
-        final_job = self.job_store.get_job(job.job_id)
-        if final_job is None or final_job.status != ReconstructionJobStatus.completed or final_job.result is None:
-            message = final_job.error if final_job is not None else "reconstruction job disappeared"
-            raise RuntimeError(message or "reconstruction failed")
+        result = await self.artifact_service.generate_result(
+            job_id=f"report-inline-{uuid4().hex}",
+            payload=payload,
+        )
 
         return MediaAsset(
             kind=MediaAssetKind.video,
-            uri=final_job.result.video_gcs_uri,
-            generator=final_job.result.model_used,
-            manifest_uri=final_job.result.manifest_gcs_uri,
+            uri=result.video_gcs_uri,
+            generator=result.model_used,
+            manifest_uri=result.manifest_gcs_uri,
             state=ReportBlockState.ready,
         )

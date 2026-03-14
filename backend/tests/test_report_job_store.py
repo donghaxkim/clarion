@@ -1,4 +1,12 @@
-from app.models import ReportDocument, ReportGenerationJobStatus, ReportStatus
+from app.models import (
+    CaseEvidenceBundle,
+    EvidenceItem,
+    EvidenceItemType,
+    GenerateReportRequest,
+    ReportDocument,
+    ReportGenerationJobStatus,
+    ReportStatus,
+)
 from app.services.generation.job_store import ReportJobStore
 
 
@@ -50,3 +58,32 @@ def test_job_store_preserves_last_progress_when_job_fails(tmp_path):
     assert failed is not None
     assert failed.status == ReportGenerationJobStatus.failed
     assert failed.progress == 78
+
+
+def test_job_store_round_trips_request_payload_and_claims_once(tmp_path):
+    store = ReportJobStore(str(tmp_path / "jobs.json"))
+    job = store.create_job(
+        report=ReportDocument(report_id="report-3", status=ReportStatus.running)
+    )
+
+    payload = GenerateReportRequest(
+        bundle=CaseEvidenceBundle(
+            case_id="case-1",
+            evidence_items=[
+                EvidenceItem(
+                    evidence_id="ev-1",
+                    kind=EvidenceItemType.transcript,
+                    summary="Witness statement",
+                )
+            ],
+        ),
+        user_id="user-1",
+    )
+    request_uri = store.save_request(job.job_id, payload)
+
+    loaded = store.load_request(job.job_id)
+    assert request_uri.endswith(f"/report-jobs/{job.job_id}/request.json")
+    assert loaded.user_id == "user-1"
+    assert loaded.bundle.case_id == "case-1"
+    assert store.claim_job(job.job_id) is True
+    assert store.claim_job(job.job_id) is False

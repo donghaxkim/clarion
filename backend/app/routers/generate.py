@@ -1,17 +1,14 @@
 import asyncio
 import json
+import logging
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from app.agents.reporting.progress import build_queued_activity, build_workflow_state
 from app.config import (
-    GCS_ALLOW_LOCAL_FALLBACK,
-    LOCAL_ARTIFACTS_DIR,
     REPORT_ENABLE_PUBLIC_CONTEXT,
-    REPORT_JOB_STORE_PATH,
 )
 from app.models import (
     Citation,
@@ -25,13 +22,15 @@ from app.models import (
     ReportGenerationJobStatusResponse,
     ReportStatus,
 )
-from app.services.generation import ReportGenerationOrchestrator, ReportJobStore
+from app.services.cloud import CloudRunJobDispatcher
+from app.services.generation import ReportJobStore
 from app.utils.storage import materialize_browser_uri
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-job_store = ReportJobStore(path=REPORT_JOB_STORE_PATH)
-orchestrator = ReportGenerationOrchestrator(job_store=job_store)
+job_store = ReportJobStore()
+dispatcher = CloudRunJobDispatcher()
 
 
 @router.post("/jobs", response_model=GenerateReportJobAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -50,7 +49,8 @@ async def create_report_job(payload: GenerateReportRequest):
         activity=build_queued_activity(),
         workflow=workflow,
     )
-    asyncio.create_task(orchestrator.run_job(job.job_id, payload))
+    job_store.save_request(job.job_id, payload)
+    dispatcher.dispatch_report_job(job.job_id)
     return GenerateReportJobAcceptedResponse(
         job_id=job.job_id,
         report_id=report_id,
@@ -99,18 +99,6 @@ async def get_report(report_id: str, request: Request):
     if report is None:
         raise HTTPException(status_code=404, detail=f"Unknown report_id: {report_id}")
     return _materialize_report_for_client(report, request=request)
-
-
-@router.get("/artifacts/{artifact_path:path}")
-async def get_local_artifact(artifact_path: str):
-    if not GCS_ALLOW_LOCAL_FALLBACK:
-        raise HTTPException(status_code=404, detail="Local artifact fallback is disabled.")
-
-    resolved_path = _resolve_local_artifact_path(artifact_path)
-    if resolved_path is None or not resolved_path.is_file():
-        raise HTTPException(status_code=404, detail=f"Unknown artifact path: {artifact_path}")
-
-    return FileResponse(resolved_path)
 
 
 def _encode_sse(event_type: str, payload: dict, event_id: int) -> str:
@@ -209,10 +197,7 @@ def _materialize_required_uri(uri: str | None, *, request: Request) -> str | Non
     try:
         return materialize_browser_uri(uri, base_url=str(request.base_url))
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unable to materialize a browser URL for artifact {uri!r}.",
-        ) from exc
+        return _raise_artifact_materialization_error(uri, exc)
 
 
 def _materialize_optional_uri(uri: str | None, *, request: Request) -> str | None:
@@ -221,13 +206,16 @@ def _materialize_optional_uri(uri: str | None, *, request: Request) -> str | Non
 
     try:
         return materialize_browser_uri(uri, base_url=str(request.base_url))
-    except Exception:
-        return None
+    except Exception as exc:
+        return _raise_artifact_materialization_error(uri, exc)
 
 
-def _resolve_local_artifact_path(artifact_path: str) -> Path | None:
-    base_dir = Path(LOCAL_ARTIFACTS_DIR).resolve()
-    candidate = (base_dir / artifact_path).resolve()
-    if candidate == base_dir or base_dir in candidate.parents:
-        return candidate
-    return None
+def _raise_artifact_materialization_error(uri: str | None, exc: Exception) -> None:
+    logger.exception(
+        "Failed to materialize report artifact URL for uri=%s",
+        uri,
+    )
+    raise HTTPException(
+        status_code=500,
+        detail=f"Artifact URL signing is unavailable for {uri!r}. {exc}",
+    ) from exc

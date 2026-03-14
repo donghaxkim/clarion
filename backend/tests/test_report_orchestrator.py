@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+from app.agents.reporting import AdkReportingPipeline
 from app.agents.reporting.progress import (
     NODE_FINAL_COMPOSER,
     NODE_GROUNDING_REVIEWER,
@@ -16,6 +17,7 @@ from app.agents.reporting.types import (
     MediaPlan,
     MediaRequest,
     PipelineResult,
+    ReportGenerationPolicy,
     TimelineEvent,
     TimelinePlan,
 )
@@ -251,6 +253,27 @@ class _FailingPipeline:
         raise RuntimeError("synthetic pipeline failure")
 
 
+class _FailingAdkPipeline(AdkReportingPipeline):
+    def __init__(self):
+        super().__init__(
+            policy=ReportGenerationPolicy(
+                text_model="gemini-3-pro-preview",
+                helper_model="gemini-3-flash-preview",
+                image_model="gemini-3-pro-image-preview",
+                search_model="gemini-2.5-flash",
+                enable_public_context=False,
+                max_images=1,
+                max_reconstructions=1,
+            )
+        )
+
+    async def run(self, *, bundle, report_id, user_id, progress_callback=None):
+        del bundle, report_id, user_id, progress_callback
+        raise RuntimeError(
+            "Failed to parse the parameter timeline_events of function set_model_response"
+        )
+
+
 class _FakeImageGenerator:
     async def generate(self, *, case_id, report_id, block_id, prompt):
         del case_id, report_id, block_id, prompt
@@ -464,4 +487,31 @@ def test_orchestrator_keeps_progress_monotonic_when_media_is_omitted(tmp_path):
     assert final.progress == 100
     assert "event-impact-image omitted: image model unavailable" in final.warnings
     assert all(block.id != "event-impact-image" for block in final.report.sections)
+    assert store.progress_history == sorted(store.progress_history)
+
+
+def test_orchestrator_falls_back_when_adk_pipeline_fails(tmp_path):
+    store = _RecordingReportJobStore(str(tmp_path / "jobs.json"))
+    report = ReportDocument(report_id="report-6", status=ReportStatus.running)
+    job = store.create_job(report=report)
+
+    orchestrator = ReportGenerationOrchestrator(
+        job_store=store,
+        pipeline_factory=lambda **_: _FailingAdkPipeline(),
+        image_generator=_FakeImageGenerator(),
+        reconstruction_service=_FakeReconstructionService(),
+        upload_bytes_fn=lambda data, gcs_key, content_type="application/octet-stream": f"gs://test/{gcs_key}",
+    )
+
+    asyncio.run(orchestrator.run_job(job.job_id, _request()))
+
+    final = store.get_job(job.job_id)
+    assert final is not None
+    assert final.status == ReportGenerationJobStatus.completed
+    assert final.report is not None
+    assert final.report.status == ReportStatus.completed
+    assert any(
+        warning.startswith("ADK reporting pipeline failed; used deterministic fallback pipeline.")
+        for warning in final.report.warnings
+    )
     assert store.progress_history == sorted(store.progress_history)

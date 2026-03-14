@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import Callable
 
 from app.config import VEO_FAST_MODEL, VEO_FINAL_MODEL
 from app.models import (
@@ -24,32 +25,41 @@ def _identity_uri(uri: str) -> str:
     return uri
 
 
-class ReconstructionOrchestrator:
+class ReconstructionArtifactService:
     def __init__(
         self,
         *,
-        job_store: ReconstructionJobStore,
         veo_client: VeoClient,
         upload_bytes_fn=upload_bytes,
         storage_uri_fn=_identity_uri,
     ):
-        self.job_store = job_store
         self.veo_client = veo_client
         self.upload_bytes_fn = upload_bytes_fn
         self.storage_uri_fn = storage_uri_fn
 
-    async def run_job(self, job_id: str, payload: ReconstructionJobRequest) -> None:
-        try:
-            model_used, video_bytes = await self._generate_video(job_id, payload)
-            result = self._upload_result(job_id, payload, model_used, video_bytes)
-            self.job_store.mark_completed(job_id, result)
-        except Exception as exc:
-            self.job_store.mark_failed(job_id, str(exc))
+    async def generate_result(
+        self,
+        job_id: str,
+        payload: ReconstructionJobRequest,
+        *,
+        status_callback: Callable[[ReconstructionJobStatus, int], None] | None = None,
+    ) -> ReconstructionResult:
+        model_used, video_bytes = await self._generate_video(
+            payload=payload,
+            status_callback=status_callback,
+        )
+        if status_callback is not None:
+            status_callback(ReconstructionJobStatus.uploading, 85)
+        return self._upload_result(job_id, payload, model_used, video_bytes)
 
     async def _generate_video(
-        self, job_id: str, payload: ReconstructionJobRequest
+        self,
+        *,
+        payload: ReconstructionJobRequest,
+        status_callback: Callable[[ReconstructionJobStatus, int], None] | None = None,
     ) -> tuple[str, bytes]:
-        self._set_status(job_id, ReconstructionJobStatus.running_fast, 20)
+        if status_callback is not None:
+            status_callback(ReconstructionJobStatus.running_fast, 20)
         fast_video = await self._generate_with_retry(
             model=VEO_FAST_MODEL,
             prompt=build_prompt(payload),
@@ -58,7 +68,8 @@ class ReconstructionOrchestrator:
         if payload.quality_mode == QualityMode.fast_only:
             return VEO_FAST_MODEL, fast_video
 
-        self._set_status(job_id, ReconstructionJobStatus.running_final, 60)
+        if status_callback is not None:
+            status_callback(ReconstructionJobStatus.running_final, 60)
         final_video = await self._generate_with_retry(
             model=VEO_FINAL_MODEL,
             prompt=build_refined_prompt(payload),
@@ -73,7 +84,6 @@ class ReconstructionOrchestrator:
         model_used: str,
         video_bytes: bytes,
     ) -> ReconstructionResult:
-        self._set_status(job_id, ReconstructionJobStatus.uploading, 85)
         base_key = f"reconstructions/{payload.case_id}/{job_id}"
 
         video_gcs_uri = self.upload_bytes_fn(
@@ -125,11 +135,6 @@ class ReconstructionOrchestrator:
                     f"fallback={type(fallback_error).__name__}: {fallback_error})"
                 ) from fallback_error
 
-    def _set_status(
-        self, job_id: str, status: ReconstructionJobStatus, progress: int
-    ) -> None:
-        self.job_store.update_status(job_id, status=status, progress=progress, error=None)
-
     @staticmethod
     def _generation_options(payload: ReconstructionJobRequest) -> dict[str, object]:
         return {
@@ -161,3 +166,38 @@ class ReconstructionOrchestrator:
             "video_gcs_uri": video_gcs_uri,
             "created_at": datetime.now(UTC).isoformat(),
         }
+
+
+class ReconstructionOrchestrator:
+    def __init__(
+        self,
+        *,
+        job_store: ReconstructionJobStore,
+        veo_client: VeoClient,
+        upload_bytes_fn=upload_bytes,
+        storage_uri_fn=_identity_uri,
+        artifact_service: ReconstructionArtifactService | None = None,
+    ):
+        self.job_store = job_store
+        self.veo_client = veo_client
+        self.artifact_service = artifact_service or ReconstructionArtifactService(
+            veo_client=veo_client,
+            upload_bytes_fn=upload_bytes_fn,
+            storage_uri_fn=storage_uri_fn,
+        )
+
+    async def run_job(self, job_id: str, payload: ReconstructionJobRequest) -> None:
+        try:
+            result = await self.artifact_service.generate_result(
+                job_id,
+                payload,
+                status_callback=lambda status, progress: self._set_status(job_id, status, progress),
+            )
+            self.job_store.mark_completed(job_id, result)
+        except Exception as exc:
+            self.job_store.mark_failed(job_id, str(exc))
+
+    def _set_status(
+        self, job_id: str, status: ReconstructionJobStatus, progress: int
+    ) -> None:
+        self.job_store.update_status(job_id, status=status, progress=progress, error=None)

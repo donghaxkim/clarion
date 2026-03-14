@@ -70,7 +70,6 @@ def build_root_agent(
         instruction=_timeline_refiner_instruction(),
         output_schema=TimelinePlan,
         output_key=TIMELINE_PLAN_STATE,
-        tools=[exit_review_loop],
         before_model_callback=before_model_guard,
         **build_progress_callbacks(progress_events),
     )
@@ -135,14 +134,6 @@ def build_root_agent(
         sub_agents=[planner_agent, review_loop, enrichment_parallel, composer_agent],
         description="Generates a chronological report with evidence grounding and optional public context.",
     )
-
-
-def exit_review_loop(tool_context: Any) -> dict[str, object]:
-    tool_context.actions.escalate = True
-    tool_context.actions.skip_summarization = True
-    return {}
-
-
 def _timeline_planner_instruction() -> str:
     return f"""
 You are building the source-of-truth chronology for a legal report.
@@ -180,7 +171,7 @@ Rules:
 
 def _timeline_refiner_instruction() -> str:
     return f"""
-You either repair the timeline plan or exit the review loop.
+You either repair the timeline plan or return it unchanged when it already passes review.
 
 Current case bundle:
 {{{CASE_BUNDLE_STATE}}}
@@ -191,7 +182,9 @@ Current timeline plan:
 Review feedback:
 {{{GROUNDING_REVIEW_STATE}}}
 
-If the review feedback marks approved=true, you MUST call the exit_review_loop tool and output nothing.
+If the review feedback marks approved=true:
+- Return the current TimelinePlan JSON object unchanged.
+- Do not add, remove, or reorder events.
 Otherwise:
 - Return a corrected TimelinePlan JSON object.
 - Resolve all listed issues without inventing unsupported evidence.

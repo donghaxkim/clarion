@@ -14,8 +14,8 @@ You create a case, upload evidence, and use the REST API (or future frontend) to
 
 ```bash
 cd backend
-pip install -r ../requirements.txt
-cp ../.env.example ../.env   # add GOOGLE_API_KEY if using Gemini
+pip install -r requirements.txt
+cp .env.example .env   # fill in GCP / Firestore / Cloud Tasks / GCS settings
 PYTHONPATH=. uvicorn app.main:app --reload
 ```
 
@@ -28,6 +28,23 @@ PYTHONPATH=. uvicorn app.main:app --reload
 
 - **Backend:** Python, FastAPI, Pydantic  
 - **AI:** Google Gemini (optional)  
-- **Storage:** Local uploads by default; schema supports GCS URLs  
+- **Storage:** Firestore for job metadata, GCS for report artifacts and job payloads
+- **Execution:** Cloud Tasks dispatches Cloud Run Jobs for report and reconstruction workers
+
+## Private GCS artifact delivery
+
+Cloud Run serves report and reconstruction artifacts from a private GCS bucket by
+generating V4 signed URLs at request time.
+
+- Set `SIGNED_URL_SERVICE_ACCOUNT_EMAIL` to the service account that should sign artifact URLs.
+- Enable `iamcredentials.googleapis.com` in the same project as the signer.
+- Grant the API runtime service account `roles/iam.serviceAccountTokenCreator` on `SIGNED_URL_SERVICE_ACCOUNT_EMAIL`.
+- Keep the bucket private. Clarion now expects signed URLs instead of public `storage.googleapis.com` links.
+
+Post-deploy validation:
+
+1. Submit a reconstruction or report job until it reaches `completed`.
+2. Call the polling/report endpoint and confirm the returned artifact URL is HTTPS and includes `X-Goog-Algorithm`, `X-Goog-Credential`, and `X-Goog-Signature`.
+3. Fetch that URL from your browser or `curl` outside GCP and confirm the object loads without making the bucket public.
 
 For full API reference, project structure, and schema details, see the in-repo docs or `backend/app/models/schema.py`.
