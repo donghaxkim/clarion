@@ -29,7 +29,71 @@ PYTHONPATH=. uvicorn app.main:app --reload
 - **Backend:** Python, FastAPI, Pydantic  
 - **AI:** Google Gemini (optional)  
 - **Storage:** Firestore for job metadata, GCS for report artifacts and job payloads
-- **Execution:** Cloud Tasks dispatches Cloud Run Jobs for report, analysis, and reconstruction workers
+- **Execution:** Cloud Tasks dispatches a warm Cloud Run worker service for report and analysis; reconstruction remains on a separate Cloud Run Job
+
+## Report Workflow
+
+```mermaid
+flowchart TD
+    U["User / Experience UI"] --> API["clarion-api<br/>POST /cases/{caseId}/report-jobs"]
+    API --> STORE["ReportJobStore<br/>create queued job + save request"]
+    API --> TASKS["Cloud Tasks<br/>enqueue report task"]
+    TASKS --> WORKER["clarion-intelligence-worker<br/>POST /internal/report-jobs/{job_id}"]
+    WORKER --> ORCH["ReportGenerationOrchestrator.run_job(...)"]
+    ORCH --> STORE
+
+    ORCH --> ADKRT["AdkReportingPipeline.run(...)"]
+
+    subgraph ADK["ADK + Gemini reporting workflow"]
+        PLANNER["TimelinePlannerAgent<br/>Gemini text model"]
+        GREVIEW["GroundingReviewerAgent<br/>Gemini text model"]
+        GREFINE["TimelineRefinerAgent<br/>Gemini text model"]
+        CTX["ContextEnrichmentAgent<br/>Gemini helper + Google Search"]
+        MEDIA["MediaPlannerAgent<br/>Gemini helper"]
+        COMPOSER["FinalComposerAgent<br/>Gemini text model"]
+        CREVIEW["CompositionReviewerAgent<br/>Gemini helper"]
+        CREFINE["CompositionRefinerAgent<br/>Gemini text model"]
+        RESULT["PipelineResult<br/>blocks + image_requests + reconstruction_requests"]
+    end
+
+    ADKRT --> PLANNER
+    PLANNER --> GREVIEW
+    GREVIEW -- "issues found" --> GREFINE
+    GREFINE --> GREVIEW
+    GREVIEW -- "approved" --> CTX
+    GREVIEW -- "approved" --> MEDIA
+    CTX --> COMPOSER
+    MEDIA --> COMPOSER
+    COMPOSER --> CREVIEW
+    CREVIEW -- "issues found" --> CREFINE
+    CREFINE --> CREVIEW
+    CREVIEW -- "approved" --> RESULT
+
+    ADKRT -- "ADK failure" --> FALLBACK["HeuristicReportingPipeline"]
+    FALLBACK --> RESULT
+
+    RESULT --> REPORT["create_initial_report(...)<br/>text blocks + media placeholders"]
+
+    subgraph MEDIAEXEC["Media execution"]
+        IMG["GeminiImageGenerator<br/>Imagen"]
+        RECON["ReconstructionMediaService<br/>Veo"]
+        IMGASSET["image asset + manifest"]
+        VIDASSET["video asset + manifest"]
+    end
+
+    RESULT --> IMG
+    RESULT --> RECON
+    IMG --> IMGASSET
+    RECON --> VIDASSET
+
+    IMGASSET --> ATTACH["attach_media_asset(...)"]
+    VIDASSET --> ATTACH
+    ATTACH --> FINAL["finalize_report(...)<br/>persist report.json + manifest"]
+    FINAL --> STORE
+
+    STORE --> STATUS["GET /generate/jobs/{job_id}<br/>SSE + polling"]
+    STATUS --> U
+```
 
 ## Private GCS artifact delivery
 
