@@ -49,11 +49,15 @@ CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL = os.getenv(
     "CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL", ""
 ).strip()
 REPORT_TASK_QUEUE = os.getenv("REPORT_TASK_QUEUE", "clarion-report-jobs").strip()
+ANALYSIS_TASK_QUEUE = os.getenv("ANALYSIS_TASK_QUEUE", "clarion-analysis-jobs").strip()
 RECONSTRUCTION_TASK_QUEUE = os.getenv(
     "RECONSTRUCTION_TASK_QUEUE", "clarion-reconstruction-jobs"
 ).strip()
 REPORT_WORKER_JOB_NAME = os.getenv(
     "REPORT_WORKER_JOB_NAME", "clarion-report-worker"
+).strip()
+ANALYSIS_WORKER_JOB_NAME = os.getenv(
+    "ANALYSIS_WORKER_JOB_NAME", "clarion-analysis-worker"
 ).strip()
 RECONSTRUCTION_WORKER_JOB_NAME = os.getenv(
     "RECONSTRUCTION_WORKER_JOB_NAME", "clarion-reconstruction-worker"
@@ -66,6 +70,6 @@ REPORT_HELPER_MODEL = os.getenv("REPORT_HELPER_MODEL", "gemini-3.1-flash-lite-pr
 REPORT_IMAGE_MODEL = os.getenv("REPORT_IMAGE_MODEL", "imagen-4.0-generate-001")
 REPORT_SEARCH_MODEL = os.getenv("REPORT_SEARCH_MODEL", "gemini-2.5-flash")
 REPORT_MAX_IMAGES = _env_int("REPORT_MAX_IMAGES", 3)
-REPORT_MAX_RECONSTRUCTIONS = _env_int("REPORT_MAX_RECONSTRUCTIONS", 2)
+REPORT_MAX_RECONSTRUCTIONS = _env_int("REPORT_MAX_RECONSTRUCTIONS", 1)
 REPORT_ENABLE_PUBLIC_CONTEXT = _env_flag("REPORT_ENABLE_PUBLIC_CONTEXT", default=True)
 REPORT_CONTEXT_CACHE_ENABLED = _env_flag("REPORT_CONTEXT_CACHE_ENABLED", default=True)

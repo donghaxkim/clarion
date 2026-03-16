@@ -18,7 +18,7 @@ from app.models.schema import (
     SourcePin,
 )
 from app.services import case_service as case_service_module
-from app.services.case_service import CaseWorkspaceService
+from app.services.case_service import CaseWorkspaceService, InMemoryCaseWorkspaceBackend
 from app.services.generation.job_store import ReportJobStore
 from app.services.intelligence.citations import CitationIndex, IndexedFact
 from app.services.voice.context_service import VoiceContextService
@@ -75,7 +75,7 @@ def _make_index() -> CitationIndex:
 
 
 def test_voice_context_service_uses_report_and_case_state(monkeypatch, tmp_path):
-    case_service = CaseWorkspaceService()
+    case_service = CaseWorkspaceService(backend=InMemoryCaseWorkspaceBackend())
     record = case_service.create_case(
         title="Smith v. Johnson",
         case_type="personal_injury",
@@ -161,7 +161,7 @@ def test_voice_context_service_uses_report_and_case_state(monkeypatch, tmp_path)
 def test_voice_context_service_returns_none_for_unknown_report(tmp_path):
     service = VoiceContextService(
         report_store=ReportJobStore(str(tmp_path / "jobs.json")),
-        case_service=CaseWorkspaceService(),
+        case_service=CaseWorkspaceService(backend=InMemoryCaseWorkspaceBackend()),
     )
 
     assert service.get_context("missing-report") is None

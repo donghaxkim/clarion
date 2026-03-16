@@ -138,6 +138,7 @@ class EventCandidate(BaseModel):
     sort_key: str = Field(min_length=1)
     timestamp_label: Optional[str] = None
     evidence_refs: list[str] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
     scene_description: Optional[str] = None
     image_prompt_hint: Optional[str] = None
     reference_image_uris: list[str] = Field(default_factory=list, max_length=3)
@@ -175,6 +176,8 @@ class GenerateReportRequest(BaseModel):
 
 class Citation(BaseModel):
     source_id: str = Field(min_length=1)
+    source_label: Optional[str] = None
+    excerpt: Optional[str] = None
     segment_id: Optional[str] = None
     page_number: Optional[int] = Field(default=None, ge=1)
     time_range_ms: Optional[list[int]] = Field(default=None, min_length=2, max_length=2)
@@ -191,6 +194,14 @@ class Citation(BaseModel):
         if start < 0 or end < start:
             raise ValueError("time_range_ms must be an ordered, non-negative start/end pair")
         return value
+
+    @field_validator("source_label", "excerpt", "snippet")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
 
 
 class MediaAsset(BaseModel):

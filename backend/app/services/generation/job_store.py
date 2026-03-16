@@ -39,6 +39,8 @@ class ReportJobBackend(Protocol):
 
     def get_request_for_report(self, report_id: str) -> GenerateReportRequest | None: ...
 
+    def save_report(self, report_id: str, report: ReportDocument) -> ReportDocument: ...
+
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]: ...
 
     def publish(
@@ -115,6 +117,9 @@ class ReportJobStore:
 
     def get_request_for_report(self, report_id: str) -> GenerateReportRequest | None:
         return self._get_backend().get_request_for_report(report_id)
+
+    def save_report(self, report_id: str, report: ReportDocument) -> ReportDocument:
+        return self._get_backend().save_report(report_id, report)
 
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]:
         return self._get_backend().get_events_since(job_id, event_id)
@@ -272,6 +277,36 @@ class FirestoreReportJobBackend:
             return self.load_request(job_id)
         except Exception:
             return None
+
+    def save_report(self, report_id: str, report: ReportDocument) -> ReportDocument:
+        client = self._get_client()
+        snapshot = self._report_ref(client, report_id).get()
+        if not snapshot.exists:
+            raise KeyError(f"Unknown report_id: {report_id}")
+
+        doc = snapshot.to_dict() or {}
+        report_gcs_uri = doc.get("report_gcs_uri")
+        if report_gcs_uri:
+            _store_json_at_uri(
+                self.blob_store,
+                report_gcs_uri,
+                report.model_dump(mode="json"),
+            )
+        else:
+            report_gcs_uri = self.blob_store.upload_json(
+                report.model_dump(mode="json"),
+                _canonical_report_key(report_id),
+            )
+
+        self._report_ref(client, report_id).set(
+            _report_metadata_doc(
+                report_id=report_id,
+                status=report.status,
+                report_gcs_uri=report_gcs_uri,
+                job_id=doc.get("job_id", ""),
+            )
+        )
+        return report
 
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]:
         client = self._get_client()
@@ -619,6 +654,31 @@ class InMemoryReportJobBackend:
         except Exception:
             return None
 
+    def save_report(self, report_id: str, report: ReportDocument) -> ReportDocument:
+        with self._lock:
+            doc = dict(self.reports.get(report_id) or {})
+            if not doc:
+                raise KeyError(f"Unknown report_id: {report_id}")
+            report_gcs_uri = doc.get("report_gcs_uri")
+            if report_gcs_uri:
+                _store_json_at_uri(
+                    self.blob_store,
+                    report_gcs_uri,
+                    report.model_dump(mode="json"),
+                )
+            else:
+                report_gcs_uri = self.blob_store.upload_json(
+                    report.model_dump(mode="json"),
+                    _canonical_report_key(report_id),
+                )
+            self.reports[report_id] = _report_metadata_doc(
+                report_id=report_id,
+                status=report.status,
+                report_gcs_uri=report_gcs_uri,
+                job_id=doc.get("job_id", ""),
+            )
+        return report
+
     def get_events_since(self, job_id: str, event_id: int) -> list[ReportJobEvent]:
         with self._lock:
             items = [dict(event) for event in self.events.get(job_id, [])]
@@ -844,6 +904,10 @@ def _report_preview_key(job_id: str) -> str:
 
 def _report_request_key(job_id: str) -> str:
     return f"report-jobs/{job_id}/request.json"
+
+
+def _canonical_report_key(report_id: str) -> str:
+    return f"reports/{report_id}/report.json"
 
 
 def _store_json_at_uri(

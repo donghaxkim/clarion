@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.services.cloud import CloudRunJobDispatcher
 from app.services.generation import ReportJobStore
+from app.services.generation.report_citations import normalize_report_document
 from app.utils.storage import materialize_browser_uri
 
 router = APIRouter()
@@ -35,6 +36,17 @@ dispatcher = CloudRunJobDispatcher()
 
 @router.post("/jobs", response_model=GenerateReportJobAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_report_job(payload: GenerateReportRequest):
+    return enqueue_report_job(payload)
+
+
+def enqueue_report_job(
+    payload: GenerateReportRequest,
+    *,
+    store: ReportJobStore | None = None,
+    job_dispatcher: CloudRunJobDispatcher | None = None,
+) -> GenerateReportJobAcceptedResponse:
+    store = store or job_store
+    job_dispatcher = job_dispatcher or dispatcher
     report_id = str(uuid.uuid4())
     report = ReportDocument(report_id=report_id, status=ReportStatus.running)
     workflow = build_workflow_state(
@@ -44,13 +56,13 @@ async def create_report_job(payload: GenerateReportRequest):
             else REPORT_ENABLE_PUBLIC_CONTEXT
         )
     )
-    job = job_store.create_job(
+    job = store.create_job(
         report=report,
         activity=build_queued_activity(),
         workflow=workflow,
     )
-    job_store.save_request(job.job_id, payload)
-    dispatcher.dispatch_report_job(job.job_id)
+    store.save_request(job.job_id, payload)
+    job_dispatcher.dispatch_report_job(job.job_id)
     return GenerateReportJobAcceptedResponse(
         job_id=job.job_id,
         report_id=report_id,
@@ -62,10 +74,7 @@ async def create_report_job(payload: GenerateReportRequest):
 
 @router.get("/jobs/{job_id}", response_model=ReportGenerationJobStatusResponse)
 async def get_report_job(job_id: str, request: Request):
-    job = job_store.get_status(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
-    return _materialize_job_for_client(job, request=request)
+    return get_materialized_job_status(job_id, request=request)
 
 
 @router.get("/jobs/{job_id}/stream")
@@ -95,9 +104,46 @@ async def stream_report_job(job_id: str):
 
 @router.get("/reports/{report_id}", response_model=ReportDocument)
 async def get_report(report_id: str, request: Request):
-    report = job_store.get_report(report_id)
+    return get_materialized_report(report_id, request=request)
+
+
+def get_materialized_job_status(
+    job_id: str,
+    *,
+    request: Request,
+    store: ReportJobStore | None = None,
+) -> ReportGenerationJobStatusResponse:
+    store = store or job_store
+    job = store.get_status(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+    if job.report is not None:
+        request_payload = store.get_request_for_report(job.report_id)
+        report = _normalize_report_for_delivery(
+            job.report,
+            store=store,
+            request_payload=request_payload,
+        )
+        job = job.model_copy(update={"report": report})
+    return _materialize_job_for_client(job, request=request)
+
+
+def get_materialized_report(
+    report_id: str,
+    *,
+    request: Request,
+    store: ReportJobStore | None = None,
+) -> ReportDocument:
+    store = store or job_store
+    report = store.get_report(report_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"Unknown report_id: {report_id}")
+    request_payload = store.get_request_for_report(report_id)
+    report = _normalize_report_for_delivery(
+        report,
+        store=store,
+        request_payload=request_payload,
+    )
     return _materialize_report_for_client(report, request=request)
 
 
@@ -219,3 +265,24 @@ def _raise_artifact_materialization_error(uri: str | None, exc: Exception) -> No
         status_code=500,
         detail=f"Artifact URL signing is unavailable for {uri!r}. {exc}",
     ) from exc
+
+
+def _normalize_report_for_delivery(
+    report: ReportDocument,
+    *,
+    store: ReportJobStore,
+    request_payload: GenerateReportRequest | None,
+) -> ReportDocument:
+    normalized_report, changed = normalize_report_document(
+        report,
+        bundle=(request_payload.bundle if request_payload is not None else None),
+    )
+    if changed:
+        try:
+            store.save_report(report.report_id, normalized_report)
+        except Exception:
+            logger.exception(
+                "Failed to persist canonical citation upgrade for report_id=%s",
+                report.report_id,
+            )
+    return normalized_report

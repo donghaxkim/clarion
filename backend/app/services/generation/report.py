@@ -10,6 +10,7 @@ from app.agents.reporting.types import (
     PipelineResult,
 )
 from app.models import (
+    CaseEvidenceBundle,
     MediaAsset,
     ReportBlock,
     ReportBlockState,
@@ -18,9 +19,15 @@ from app.models import (
     ReportProvenance,
     ReportStatus,
 )
+from app.services.generation.report_citations import normalize_report_document
 
 
-def create_initial_report(report_id: str, draft: PipelineResult) -> ReportDocument:
+def create_initial_report(
+    report_id: str,
+    draft: PipelineResult,
+    *,
+    bundle: CaseEvidenceBundle | None = None,
+) -> ReportDocument:
     normalized_draft = _normalize_pipeline_result(draft)
     blocks = [_draft_to_block(block) for block in normalized_draft.blocks]
     blocks.extend(_media_request_to_block(request) for request in normalized_draft.image_requests)
@@ -29,13 +36,14 @@ def create_initial_report(report_id: str, draft: PipelineResult) -> ReportDocume
         for request in normalized_draft.reconstruction_requests
     )
     blocks.sort(key=lambda block: block.sort_key)
-    return ReportDocument(
+    report = ReportDocument(
         report_id=report_id,
         status=ReportStatus.running,
         sections=blocks,
         warnings=list(draft.warnings),
         generated_at=None,
     )
+    return normalize_report_document(report, bundle=bundle)[0]
 
 
 def create_preview_report(
@@ -43,6 +51,7 @@ def create_preview_report(
     *,
     snapshot: PipelinePreviewSnapshot,
     warnings: list[str] | None = None,
+    bundle: CaseEvidenceBundle | None = None,
 ) -> ReportDocument:
     media_plan = _normalize_media_plan(snapshot.media_plan)
     blocks: list[ReportBlock] = []
@@ -61,13 +70,14 @@ def create_preview_report(
         )
 
     blocks.sort(key=lambda block: block.sort_key)
-    return ReportDocument(
+    report = ReportDocument(
         report_id=report_id,
         status=ReportStatus.running,
         sections=blocks,
         warnings=list(warnings or []),
         generated_at=None,
     )
+    return normalize_report_document(report, bundle=bundle)[0]
 
 
 def attach_media_asset(

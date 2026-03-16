@@ -27,7 +27,7 @@ from app.agents.reporting.types import (
     ReportGenerationPolicy,
     TimelinePlan,
 )
-from app.agents.reporting.validators import normalize_composer_output
+from app.agents.reporting.validators import normalize_composer_output, normalize_media_plan
 from app.config import (
     GCS_BUCKET,
     GOOGLE_API_KEY,
@@ -164,6 +164,7 @@ class AdkReportingPipeline:
         timeline = _model_from_state(state, TIMELINE_PLAN_STATE, TimelinePlan)
         composer = normalize_composer_output(composer, timeline)
         media_plan = _model_from_state(state, MEDIA_PLAN_STATE, MediaPlan)
+        media_plan = normalize_media_plan(media_plan, timeline)
         return PipelineResult(
             blocks=composer.blocks,
             image_requests=media_plan.image_requests[: self.policy.max_images],

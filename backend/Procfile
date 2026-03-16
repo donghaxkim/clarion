@@ -1,3 +1,4 @@
 web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 reportworker: python3 -m app.workers report
+analysisworker: python3 -m app.workers analysis
 reconstructionworker: python3 -m app.workers reconstruction

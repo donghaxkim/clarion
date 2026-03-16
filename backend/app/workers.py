@@ -7,16 +7,25 @@ import os
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Clarion Cloud Run worker entrypoints")
-    parser.add_argument("worker", choices=("report", "reconstruction"))
+    parser.add_argument("worker", choices=("report", "analysis", "reconstruction"))
     args = parser.parse_args(argv)
 
-    job_id = os.getenv("CLARION_JOB_ID", "").strip()
-    if not job_id:
-        raise RuntimeError("CLARION_JOB_ID must be set for worker execution")
-
     if args.worker == "report":
+        job_id = _require_env("CLARION_JOB_ID")
         return asyncio.run(run_report_worker(job_id))
+    if args.worker == "analysis":
+        case_id = _require_env("CLARION_CASE_ID")
+        evidence_revision = int(_require_env("CLARION_EVIDENCE_REVISION"))
+        return asyncio.run(run_analysis_worker(case_id, evidence_revision))
+    job_id = _require_env("CLARION_JOB_ID")
     return asyncio.run(run_reconstruction_worker(job_id))
+
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} must be set for worker execution")
+    return value
 
 
 async def run_report_worker(job_id: str) -> int:
@@ -28,6 +37,13 @@ async def run_report_worker(job_id: str) -> int:
     payload = store.load_request(job_id)
     orchestrator = ReportGenerationOrchestrator(job_store=store)
     await orchestrator.run_job(job_id, payload)
+    return 0
+
+
+async def run_analysis_worker(case_id: str, evidence_revision: int) -> int:
+    from app.services.case_service import case_workspace_service
+
+    case_workspace_service.run_analysis(case_id, expected_revision=evidence_revision)
     return 0
 
 

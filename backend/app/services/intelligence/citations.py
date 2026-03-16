@@ -17,16 +17,25 @@ import json
 from typing import TYPE_CHECKING
 
 # ── New-style citation helper (reporting pipeline) ───────────────
-from app.models import Citation as ReportCitation, ReportProvenance
+from app.services.generation.report_citations import build_evidence_citation
 
 
-def link_citation(claim: str, doc_id: str, page: int | None) -> dict:
-    del claim
-    return ReportCitation(
-        source_id=doc_id,
+def link_citation(
+    claim: str,
+    doc_id: str,
+    page: int | None,
+    *,
+    bundle=None,
+) -> dict:
+    citation = build_evidence_citation(
+        doc_id,
+        bundle=bundle,
+        excerpt=claim,
         page_number=page,
-        provenance=ReportProvenance.evidence,
-    ).model_dump(mode="json")
+    )
+    if citation is None:
+        raise ValueError(f"Unable to build evidence citation for {doc_id}")
+    return citation.model_dump(mode="json")
 
 
 # ── Full citation index (legacy intelligence layer) ─────────────

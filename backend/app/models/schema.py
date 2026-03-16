@@ -274,7 +274,7 @@ class CaseFile(BaseModel):
     report_sections: list[ReportSection] = []
 
     # Status
-    status: Literal["intake", "parsing", "analyzing", "generating", "complete"] = "intake"
+    status: Literal["intake", "parsing", "analyzing", "analyzed", "generating", "complete"] = "intake"
 
 
 # ═══════════════════════════════════════════════

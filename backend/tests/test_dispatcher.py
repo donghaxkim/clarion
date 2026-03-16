@@ -67,3 +67,36 @@ def test_dispatch_reconstruction_job_treats_duplicate_task_as_success():
     assert task_name.endswith(
         "/queues/clarion-reconstruction-jobs/tasks/reconstruction-job-456"
     )
+
+
+def test_dispatch_case_analysis_builds_cloud_task_request():
+    client = _RecordingClient()
+    dispatcher = CloudRunJobDispatcher(
+        client=client,
+        project_id="clarion-project",
+        location="us-central1",
+        service_account_email="runner@clarion-project.iam.gserviceaccount.com",
+        api_base_url="https://run.googleapis.com",
+        analysis_queue="clarion-analysis-jobs",
+        analysis_job_name="clarion-analysis-worker",
+    )
+
+    task_name = dispatcher.dispatch_case_analysis("case-123", 4)
+
+    assert task_name.endswith("/tasks/analysis-case-123-4")
+    request = client.requests[0]
+    assert request["parent"] == "projects/clarion-project/locations/us-central1/queues/clarion-analysis-jobs"
+    task = request["task"]
+    assert task["name"].endswith("/tasks/analysis-case-123-4")
+    http_request = task["http_request"]
+    assert http_request["url"] == (
+        "https://run.googleapis.com/v2/projects/clarion-project/locations/us-central1/"
+        "jobs/clarion-analysis-worker:run"
+    )
+
+    body = json.loads(http_request["body"].decode("utf-8"))
+    overrides = body["overrides"]["containerOverrides"][0]
+    assert overrides["env"] == [
+        {"name": "CLARION_CASE_ID", "value": "case-123"},
+        {"name": "CLARION_EVIDENCE_REVISION", "value": "4"},
+    ]

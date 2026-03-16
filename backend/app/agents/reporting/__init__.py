@@ -1,6 +1,7 @@
 from app.agents.reporting.fallback import HeuristicReportingPipeline
 from app.agents.reporting.runtime import AdkReportingPipeline, build_reporting_pipeline
 from app.agents.reporting.types import (
+    CompositionReview,
     ComposerOutput,
     ComposedBlockDraft,
     ContextNote,
@@ -16,6 +17,7 @@ from app.agents.reporting.types import (
 
 __all__ = [
     "AdkReportingPipeline",
+    "CompositionReview",
     "ComposerOutput",
     "ComposedBlockDraft",
     "ContextNote",

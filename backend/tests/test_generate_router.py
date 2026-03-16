@@ -2,7 +2,11 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models import (
+    CaseEvidenceBundle,
     Citation,
+    EvidenceItem,
+    EvidenceItemType,
+    GenerateReportRequest,
     MediaAsset,
     MediaAssetKind,
     ReportArtifactRefs,
@@ -91,6 +95,8 @@ def test_stream_and_report_endpoints_return_job_events(monkeypatch, tmp_path):
                 citations=[
                     Citation(
                         source_id="ev-1",
+                        segment_id="seg-1",
+                        excerpt="The witness saw the impact in the intersection.",
                         provenance=ReportProvenance.evidence,
                         uri="gs://test-bucket/evidence/ev-1.pdf",
                     )
@@ -225,3 +231,55 @@ def test_report_endpoints_return_500_when_signing_fails(monkeypatch, tmp_path):
     assert report_response.status_code == 500
     assert "Artifact URL signing is unavailable" in report_response.json()["detail"]
     assert "signing failed" in report_response.json()["detail"]
+
+
+def test_report_endpoints_upgrade_sparse_citations_and_persist_the_upgrade(monkeypatch, tmp_path):
+    store = ReportJobStore(str(tmp_path / "jobs.json"))
+    dispatcher = _RecordingDispatcher()
+    monkeypatch.setattr(generate, "job_store", store)
+    monkeypatch.setattr(generate, "dispatcher", dispatcher)
+    monkeypatch.setattr(generate, "materialize_browser_uri", lambda uri, *, base_url=None: uri)
+
+    report = ReportDocument(
+        report_id="report-router",
+        status=ReportStatus.completed,
+        sections=[
+            ReportBlock(
+                id="impact-summary",
+                type="text",
+                title="Impact Summary",
+                content="The witness says the defendant hit the stopped vehicle.",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                citations=[Citation(source_id="ev-1", provenance=ReportProvenance.evidence)],
+            )
+        ],
+    )
+    job = store.create_job(report=report)
+    store.save_request(
+        job.job_id,
+        GenerateReportRequest(
+            bundle=CaseEvidenceBundle(
+                case_id="case-router",
+                evidence_items=[
+                    EvidenceItem(
+                        evidence_id="ev-1",
+                        kind=EvidenceItemType.transcript,
+                        title="Witness Transcript",
+                        summary="The witness says the defendant hit the stopped vehicle.",
+                    )
+                ],
+            ),
+            user_id="user-1",
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/generate/reports/{report.report_id}")
+
+    assert response.status_code == 200
+    assert response.json()["sections"][0]["citations"] == []
+
+    persisted = store.get_report(report.report_id)
+    assert persisted is not None
+    assert persisted.sections[0].citations == []

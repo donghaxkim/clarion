@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 from app.config import (
+    ANALYSIS_TASK_QUEUE,
+    ANALYSIS_WORKER_JOB_NAME,
     CLOUD_RUN_JOBS_API_BASE_URL,
     CLOUD_RUN_REGION,
     CLOUD_TASKS_LOCATION,
@@ -27,8 +29,10 @@ class CloudRunJobDispatcher:
         service_account_email: str | None = None,
         api_base_url: str | None = None,
         report_queue: str | None = None,
+        analysis_queue: str | None = None,
         reconstruction_queue: str | None = None,
         report_job_name: str | None = None,
+        analysis_job_name: str | None = None,
         reconstruction_job_name: str | None = None,
     ):
         self._client = client
@@ -39,8 +43,10 @@ class CloudRunJobDispatcher:
         ).strip()
         self.api_base_url = (api_base_url or CLOUD_RUN_JOBS_API_BASE_URL).rstrip("/")
         self.report_queue = (report_queue or REPORT_TASK_QUEUE).strip()
+        self.analysis_queue = (analysis_queue or ANALYSIS_TASK_QUEUE).strip()
         self.reconstruction_queue = (reconstruction_queue or RECONSTRUCTION_TASK_QUEUE).strip()
         self.report_job_name = (report_job_name or REPORT_WORKER_JOB_NAME).strip()
+        self.analysis_job_name = (analysis_job_name or ANALYSIS_WORKER_JOB_NAME).strip()
         self.reconstruction_job_name = (
             reconstruction_job_name or RECONSTRUCTION_WORKER_JOB_NAME
         ).strip()
@@ -50,7 +56,18 @@ class CloudRunJobDispatcher:
             task_name=f"report-{job_id}",
             queue_name=self.report_queue,
             worker_job_name=self.report_job_name,
-            job_id=job_id,
+            env_vars={"CLARION_JOB_ID": job_id},
+        )
+
+    def dispatch_case_analysis(self, case_id: str, evidence_revision: int) -> str:
+        return self._enqueue_job(
+            task_name=f"analysis-{case_id}-{evidence_revision}",
+            queue_name=self.analysis_queue,
+            worker_job_name=self.analysis_job_name,
+            env_vars={
+                "CLARION_CASE_ID": case_id,
+                "CLARION_EVIDENCE_REVISION": str(evidence_revision),
+            },
         )
 
     def dispatch_reconstruction_job(self, job_id: str) -> str:
@@ -58,7 +75,7 @@ class CloudRunJobDispatcher:
             task_name=f"reconstruction-{job_id}",
             queue_name=self.reconstruction_queue,
             worker_job_name=self.reconstruction_job_name,
-            job_id=job_id,
+            env_vars={"CLARION_JOB_ID": job_id},
         )
 
     def _enqueue_job(
@@ -67,7 +84,7 @@ class CloudRunJobDispatcher:
         task_name: str,
         queue_name: str,
         worker_job_name: str,
-        job_id: str,
+        env_vars: dict[str, str],
     ) -> str:
         client = self._get_client()
         parent = self._queue_path(queue_name)
@@ -78,7 +95,7 @@ class CloudRunJobDispatcher:
                 "http_method": "POST",
                 "url": run_job_url,
                 "headers": {"Content-Type": "application/json"},
-                "body": json.dumps(self._run_job_body(job_id)).encode("utf-8"),
+                "body": json.dumps(self._run_job_body(env_vars)).encode("utf-8"),
                 "oauth_token": {
                     "service_account_email": self._require_service_account_email(),
                     "scope": "https://www.googleapis.com/auth/cloud-platform",
@@ -136,16 +153,14 @@ class CloudRunJobDispatcher:
         return self.service_account_email
 
     @staticmethod
-    def _run_job_body(job_id: str) -> dict[str, object]:
+    def _run_job_body(env_vars: dict[str, str]) -> dict[str, object]:
         return {
             "overrides": {
                 "containerOverrides": [
                     {
                         "env": [
-                            {
-                                "name": "CLARION_JOB_ID",
-                                "value": job_id,
-                            }
+                            {"name": name, "value": value}
+                            for name, value in env_vars.items()
                         ]
                     }
                 ]

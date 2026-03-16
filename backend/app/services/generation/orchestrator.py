@@ -106,6 +106,7 @@ class ReportGenerationOrchestrator:
                     tracker=tracker,
                     report=report,
                     event=event,
+                    bundle=payload.bundle,
                 )
 
             draft = await self._run_pipeline(
@@ -117,7 +118,11 @@ class ReportGenerationOrchestrator:
             )
             draft = _normalize_pipeline_result(draft)
 
-            report = create_initial_report(job.report_id, draft)
+            report = create_initial_report(
+                job.report_id,
+                draft,
+                bundle=payload.bundle,
+            )
             self.job_store.publish(
                 job_id,
                 event_type="timeline.ready",
@@ -371,6 +376,7 @@ class ReportGenerationOrchestrator:
         tracker: WorkflowProgressTracker,
         report,
         event: PipelineProgressEvent,
+        bundle,
     ):
         next_report = report
         workflow, activity, changed_node_ids = tracker.apply_event(event)
@@ -382,6 +388,7 @@ class ReportGenerationOrchestrator:
                 report.report_id,
                 snapshot=event.snapshot,
                 warnings=report.warnings,
+                bundle=bundle,
             )
             payload = {
                 "reason": event.preview_reason,

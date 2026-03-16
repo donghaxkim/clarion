@@ -24,13 +24,17 @@ from app.agents.reporting.types import (
     TimelineEvent,
     TimelinePlan,
 )
-from app.agents.reporting.validators import validate_timeline_plan
+from app.agents.reporting.validators import normalize_media_plan, validate_timeline_plan
 from app.models import (
     CaseEvidenceBundle,
     Citation,
     EventCandidate,
     ReportBlockType,
     ReportProvenance,
+)
+from app.services.generation.report_citations import (
+    build_evidence_citation,
+    build_public_context_citation,
 )
 
 ProgressCallback = Callable[[PipelineProgressEvent], Awaitable[None] | None]
@@ -189,10 +193,11 @@ class HeuristicReportingPipeline:
                     narrative=summary.strip(),
                     sort_key=f"{index:04d}",
                     evidence_refs=[evidence.evidence_id],
-                    citations=[_citation_from_evidence(evidence.evidence_id)],
+                    citations=[_citation_from_evidence(evidence.evidence_id, bundle=bundle)],
                     confidence_score=evidence.confidence_score,
-                    scene_description=summary.strip(),
-                    image_prompt=title,
+                    # Derived evidence-only events are too underspecified for safe media planning.
+                    scene_description=None,
+                    image_prompt=None,
                 )
             )
         return TimelinePlan(timeline_events=events)
@@ -202,10 +207,12 @@ class HeuristicReportingPipeline:
         candidate: EventCandidate,
         bundle: CaseEvidenceBundle,
     ) -> TimelineEvent:
-        citations = [_citation_from_evidence(ref) for ref in candidate.evidence_refs]
+        citations = list(candidate.citations)
+        if not citations:
+            citations = [_citation_from_evidence(ref, bundle=bundle) for ref in candidate.evidence_refs]
         if not citations:
             evidence = bundle.evidence_items[0]
-            citations = [_citation_from_evidence(evidence.evidence_id)]
+            citations = [_citation_from_evidence(evidence.evidence_id, bundle=bundle)]
 
         return TimelineEvent(
             event_id=candidate.event_id,
@@ -215,8 +222,8 @@ class HeuristicReportingPipeline:
             timestamp_label=candidate.timestamp_label,
             evidence_refs=candidate.evidence_refs or [citations[0].source_id],
             citations=citations,
-            scene_description=candidate.scene_description or candidate.description,
-            image_prompt=candidate.image_prompt_hint or candidate.title,
+            scene_description=candidate.scene_description,
+            image_prompt=candidate.image_prompt_hint,
             reference_image_uris=candidate.reference_image_uris,
             public_context_queries=candidate.public_context_queries,
             confidence_score=0.72,
@@ -231,18 +238,19 @@ class HeuristicReportingPipeline:
             if not event.public_context_queries:
                 continue
             query_summary = ", ".join(event.public_context_queries)
+            note_content = (
+                "Live public-context grounding is enabled for this event. "
+                f"Suggested enrichment queries: {query_summary}."
+            )
             notes.append(
                 ContextNote(
                     title=f"Context for {event.title}",
-                    content=(
-                        "Live public-context grounding is enabled for this event. "
-                        f"Suggested enrichment queries: {query_summary}."
-                    ),
+                    content=note_content,
                     sort_key=f"{event.sort_key}-ctx",
                     citations=[
-                        Citation(
-                            source_id=query,
-                            provenance=ReportProvenance.public_context,
+                        build_public_context_citation(
+                            query,
+                            fallback_excerpt=note_content,
                         )
                         for query in event.public_context_queries
                     ],
@@ -334,11 +342,36 @@ class HeuristicReportingPipeline:
                     )
                 )
 
-        return image_requests, reconstruction_requests
+        media_plan = normalize_media_plan(
+            MediaPlan(
+                image_requests=image_requests,
+                reconstruction_requests=reconstruction_requests,
+            ),
+            timeline,
+        )
+        return media_plan.image_requests, media_plan.reconstruction_requests
 
 
-def _citation_from_evidence(evidence_id: str) -> Citation:
-    return Citation(source_id=evidence_id, provenance=ReportProvenance.evidence)
+def _citation_from_evidence(
+    evidence_id: str,
+    *,
+    bundle: CaseEvidenceBundle | None = None,
+) -> Citation:
+    evidence = None
+    if bundle is not None:
+        evidence = next(
+            (item for item in bundle.evidence_items if item.evidence_id == evidence_id),
+            None,
+        )
+    citation = build_evidence_citation(
+        evidence_id,
+        bundle=bundle,
+        source_label=(evidence.title if evidence is not None else None),
+        allow_document_excerpt=True,
+    )
+    if citation is None:
+        raise ValueError(f"Unable to build evidence citation for {evidence_id}")
+    return citation
 
 
 async def _emit_progress(

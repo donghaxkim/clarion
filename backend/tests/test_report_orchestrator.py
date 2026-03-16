@@ -359,6 +359,11 @@ def test_orchestrator_runs_full_job_and_persists_report_manifest(tmp_path):
     assert final.workflow is not None
     assert final.activity is not None
     assert final.workflow.active_node_ids == []
+    assert all(
+        citation.source_label and citation.excerpt
+        for block in final.report.sections
+        for citation in block.citations
+    )
 
     image_block = next(block for block in final.report.sections if block.id == "event-impact-image")
     video_block = next(block for block in final.report.sections if block.id == "event-impact-video")

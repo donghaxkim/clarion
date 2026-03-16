@@ -42,6 +42,11 @@ class GroundingReview(BaseModel):
     issues: list[str] = Field(default_factory=list)
 
 
+class CompositionReview(BaseModel):
+    approved: bool = False
+    issues: list[str] = Field(default_factory=list)
+
+
 class ContextNote(BaseModel):
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)

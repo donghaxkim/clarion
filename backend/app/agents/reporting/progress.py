@@ -26,11 +26,14 @@ NODE_TIMELINE_REFINER = "timeline_refiner"
 NODE_CONTEXT_ENRICHMENT = "context_enrichment"
 NODE_MEDIA_PLANNER = "media_planner"
 NODE_FINAL_COMPOSER = "final_composer"
+NODE_COMPOSITION_REVIEWER = "composition_reviewer"
+NODE_COMPOSITION_REFINER = "composition_refiner"
 NODE_IMAGE_GENERATOR = "image_generator"
 NODE_RECONSTRUCTION_GENERATOR = "reconstruction_generator"
 NODE_REPORT_FINALIZER = "report_finalizer"
 
 MAX_REVIEW_ATTEMPTS = 3
+MAX_COMPOSITION_REVIEW_ATTEMPTS = 2
 
 _WORKFLOW_NODE_DEFS: tuple[
     tuple[str, str, ReportGenerationPhase, ReportWorkflowNodeKind, ReportWorkflowLane, bool],
@@ -79,6 +82,22 @@ _WORKFLOW_NODE_DEFS: tuple[
     (
         NODE_FINAL_COMPOSER,
         "Writing the report narrative",
+        ReportGenerationPhase.composition,
+        ReportWorkflowNodeKind.agent,
+        ReportWorkflowLane.composition,
+        False,
+    ),
+    (
+        NODE_COMPOSITION_REVIEWER,
+        "Reviewing the drafted report",
+        ReportGenerationPhase.composition,
+        ReportWorkflowNodeKind.agent,
+        ReportWorkflowLane.composition,
+        False,
+    ),
+    (
+        NODE_COMPOSITION_REFINER,
+        "Repairing drafted report prose",
         ReportGenerationPhase.composition,
         ReportWorkflowNodeKind.agent,
         ReportWorkflowLane.composition,
@@ -148,11 +167,26 @@ _WORKFLOW_EDGES = (
     ),
     (
         NODE_FINAL_COMPOSER,
+        NODE_COMPOSITION_REVIEWER,
+        ReportWorkflowEdgeRelation.sequence,
+    ),
+    (
+        NODE_COMPOSITION_REVIEWER,
+        NODE_COMPOSITION_REFINER,
+        ReportWorkflowEdgeRelation.loop,
+    ),
+    (
+        NODE_COMPOSITION_REFINER,
+        NODE_COMPOSITION_REVIEWER,
+        ReportWorkflowEdgeRelation.loop,
+    ),
+    (
+        NODE_COMPOSITION_REVIEWER,
         NODE_IMAGE_GENERATOR,
         ReportWorkflowEdgeRelation.sequence,
     ),
     (
-        NODE_FINAL_COMPOSER,
+        NODE_COMPOSITION_REVIEWER,
         NODE_RECONSTRUCTION_GENERATOR,
         ReportWorkflowEdgeRelation.sequence,
     ),
@@ -180,6 +214,8 @@ _AGENT_NODE_MAP = {
     "ContextEnrichmentAgent": NODE_CONTEXT_ENRICHMENT,
     "MediaPlannerAgent": NODE_MEDIA_PLANNER,
     "FinalComposerAgent": NODE_FINAL_COMPOSER,
+    "CompositionReviewerAgent": NODE_COMPOSITION_REVIEWER,
+    "CompositionRefinerAgent": NODE_COMPOSITION_REFINER,
 }
 
 
@@ -286,6 +322,7 @@ class ProgressEventBuffer:
     def __init__(self) -> None:
         self._events: deque[PipelineProgressEvent] = deque()
         self._review_attempt = 0
+        self._composition_review_attempt = 0
 
     def emit(self, event: PipelineProgressEvent) -> None:
         self._events.append(event)
@@ -368,6 +405,20 @@ class ProgressEventBuffer:
         if node_id == NODE_TIMELINE_REFINER:
             attempt = max(self._review_attempt, 1)
             return f"Review pass {attempt} of {MAX_REVIEW_ATTEMPTS}", attempt
+        if node_id == NODE_COMPOSITION_REVIEWER:
+            if increment_review:
+                self._composition_review_attempt += 1
+            attempt = max(self._composition_review_attempt, 1)
+            return (
+                f"Draft review pass {attempt} of {MAX_COMPOSITION_REVIEW_ATTEMPTS}",
+                attempt,
+            )
+        if node_id == NODE_COMPOSITION_REFINER:
+            attempt = max(self._composition_review_attempt, 1)
+            return (
+                f"Draft review pass {attempt} of {MAX_COMPOSITION_REVIEW_ATTEMPTS}",
+                attempt,
+            )
         return fallback_detail, None
 
 
@@ -672,7 +723,11 @@ class WorkflowProgressTracker:
         max_attempts = MAX_REVIEW_ATTEMPTS if node_id in {
             NODE_GROUNDING_REVIEWER,
             NODE_TIMELINE_REFINER,
-        } else None
+        } else (
+            MAX_COMPOSITION_REVIEW_ATTEMPTS
+            if node_id in {NODE_COMPOSITION_REVIEWER, NODE_COMPOSITION_REFINER}
+            else None
+        )
         return ReportGenerationActivity(
             phase=_NODE_PHASES[node_id],
             status=status,

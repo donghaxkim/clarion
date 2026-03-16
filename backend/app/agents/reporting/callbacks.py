@@ -33,7 +33,7 @@ def before_model_guard(callback_context: Any, llm_request: Any) -> Any | None:
 
 def after_model_guard(callback_context: Any, llm_response: Any) -> Any | None:
     agent_name = getattr(callback_context, "agent_name", "")
-    if agent_name != "FinalComposerAgent":
+    if agent_name not in {"FinalComposerAgent", "CompositionRefinerAgent"}:
         return None
 
     response_text = _extract_text(llm_response)

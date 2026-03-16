@@ -58,7 +58,12 @@ def test_adk_can_build_output_schema_tools_for_reporting_models():
 
 
 def test_composer_output_normalization_backfills_event_citations():
-    citation = Citation(source_id="ev-1", provenance=ReportProvenance.evidence)
+    citation = Citation(
+        source_id="ev-1",
+        segment_id="seg-1",
+        excerpt="Collision occurs in the intersection.",
+        provenance=ReportProvenance.evidence,
+    )
     timeline = TimelinePlan(
         timeline_events=[
             {
@@ -93,7 +98,12 @@ def test_composer_output_normalization_backfills_event_citations():
 
 
 def test_composer_output_normalization_sorts_blocks_by_sort_key():
-    citation = Citation(source_id="ev-1", provenance=ReportProvenance.evidence)
+    citation = Citation(
+        source_id="ev-1",
+        segment_id="seg-1",
+        excerpt="Collision occurs in the intersection.",
+        provenance=ReportProvenance.evidence,
+    )
     timeline = TimelinePlan(
         timeline_events=[
             {

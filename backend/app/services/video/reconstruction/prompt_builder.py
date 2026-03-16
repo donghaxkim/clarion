@@ -1,5 +1,10 @@
 from app.models import ReconstructionJobRequest
 
+_NO_TEXT_GUIDANCE = (
+    "Avoid any visible text, subtitles, captions, labels, signs, watermarks, "
+    "interface elements, or document text in the rendered video."
+)
+
 
 def build_prompt(payload: ReconstructionJobRequest) -> str:
     evidence_block = ", ".join(payload.evidence_refs)
@@ -12,6 +17,7 @@ def build_prompt(payload: ReconstructionJobRequest) -> str:
     return (
         "Create a factual incident reconstruction video suitable for legal report support. "
         "Keep the scene physically plausible and avoid cinematic exaggeration. "
+        f"{_NO_TEXT_GUIDANCE} "
         f"Scene: {payload.scene_description}. "
         f"Evidence references: {evidence_block}. "
         f"Aspect ratio: {payload.aspect_ratio.value}. "
@@ -30,6 +36,7 @@ def build_refined_prompt(payload: ReconstructionJobRequest) -> str:
 def build_fallback_prompt(payload: ReconstructionJobRequest) -> str:
     return (
         "Create a simple, neutral reconstruction clip with static camera motion and clear object trajectories. "
+        f"{_NO_TEXT_GUIDANCE} "
         f"Scene: {payload.scene_description}. "
         "Do not add extra entities, weather changes, or dramatic effects."
     )
