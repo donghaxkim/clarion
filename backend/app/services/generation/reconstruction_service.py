@@ -9,6 +9,7 @@ from app.models import (
     QualityMode,
     ReconstructionJobRequest,
     ReportBlockState,
+    VisualSceneSpec,
 )
 from app.services.video.reconstruction import (
     ReconstructionArtifactService,
@@ -32,16 +33,26 @@ class ReconstructionMediaService:
         case_id: str,
         section_id: str,
         scene_description: str,
+        prompt: str | None,
+        prompt_source: str | None,
+        camera_mode: str | None,
+        negative_prompt: str | None,
         evidence_refs: list[str],
         reference_image_uris: list[str],
+        visual_scene_spec: VisualSceneSpec | None,
     ) -> MediaAsset:
         payload = ReconstructionJobRequest(
             case_id=case_id,
             section_id=section_id,
             scene_description=scene_description,
+            prompt=prompt,
+            prompt_source=prompt_source,
+            camera_mode=camera_mode,
             evidence_refs=evidence_refs,
             reference_image_uris=reference_image_uris[:3],
+            visual_scene_spec=visual_scene_spec,
             duration_sec=4,
+            negative_prompt=negative_prompt,
             quality_mode=QualityMode.fast_only,
         )
         result = await self.artifact_service.generate_result(

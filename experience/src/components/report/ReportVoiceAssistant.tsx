@@ -61,6 +61,7 @@ export function ReportVoiceAssistant({
   const socketRef = useRef<WebSocket | null>(null);
   const connectPromiseRef = useRef<Promise<WebSocket> | null>(null);
   const wsBaseUrlRef = useRef<string | null>(null);
+  const sessionReadyRef = useRef(false);
   const recorderRef = useRef<RecorderRefs | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef(0);
@@ -75,6 +76,7 @@ export function ReportVoiceAssistant({
 
   const closeSocket = useCallback(() => {
     connectPromiseRef.current = null;
+    sessionReadyRef.current = false;
     const socket = socketRef.current;
     socketRef.current = null;
     if (socket && socket.readyState === WebSocket.OPEN) {
@@ -89,7 +91,7 @@ export function ReportVoiceAssistant({
     recorderRef.current = null;
     if (!recorder) {
       if (sendAudioEnd && socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: 'audio_end' }));
+        sendSocketMessage(socketRef.current, { type: 'audio_end' });
       }
       return;
     }
@@ -103,7 +105,7 @@ export function ReportVoiceAssistant({
     await recorder.context.close();
 
     if (sendAudioEnd && socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: 'audio_end' }));
+      sendSocketMessage(socketRef.current, { type: 'audio_end' });
     }
   }, []);
 
@@ -150,6 +152,9 @@ export function ReportVoiceAssistant({
     (event: VoiceServerEvent) => {
       switch (event.type) {
         case 'state':
+          if (event.value === 'idle') {
+            sessionReadyRef.current = true;
+          }
           setRawState(event.value);
           if (event.value !== 'error') {
             setErrorMessage(null);
@@ -198,13 +203,14 @@ export function ReportVoiceAssistant({
     }
 
     const existing = socketRef.current;
-    if (existing && existing.readyState === WebSocket.OPEN) {
+    if (existing && existing.readyState === WebSocket.OPEN && sessionReadyRef.current) {
       return existing;
     }
     if (connectPromiseRef.current) {
       return connectPromiseRef.current;
     }
 
+    sessionReadyRef.current = false;
     setRawState('connecting');
     const connectPromise = (async () => {
       const baseUrl = await ensureWebSocketBaseUrl();
@@ -215,25 +221,30 @@ export function ReportVoiceAssistant({
         const timeoutId = window.setTimeout(() => {
           if (socket.readyState !== WebSocket.OPEN) {
             reject(new Error('Voice connection timed out.'));
+          } else if (!sessionReadyRef.current) {
+            reject(new Error('Voice session did not become ready in time.'));
           }
         }, 5000);
 
-        socket.onopen = () => {
-          window.clearTimeout(timeoutId);
-          if (focusedSectionId) {
-            socket.send(
-              JSON.stringify({
-                type: 'context_update',
-                focused_section_id: focusedSectionId,
-              })
-            );
-          }
-          resolve(socket);
-        };
+        socket.onopen = () => undefined;
 
         socket.onmessage = (message) => {
           try {
             const event = JSON.parse(message.data) as VoiceServerEvent;
+            if (event.type === 'state' && event.value === 'idle' && !sessionReadyRef.current) {
+              window.clearTimeout(timeoutId);
+              sessionReadyRef.current = true;
+              if (focusedSectionId) {
+                sendSocketMessage(socket, {
+                  type: 'context_update',
+                  focused_section_id: focusedSectionId,
+                });
+              }
+              resolve(socket);
+            } else if (event.type === 'error' && !sessionReadyRef.current) {
+              window.clearTimeout(timeoutId);
+              reject(new Error(event.message || 'Unable to start the voice session.'));
+            }
             handleServerEvent(event);
           } catch (error) {
             console.error('Unable to parse voice event', error);
@@ -249,9 +260,11 @@ export function ReportVoiceAssistant({
           window.clearTimeout(timeoutId);
           connectPromiseRef.current = null;
           socketRef.current = null;
+          sessionReadyRef.current = false;
           if (!unmountedRef.current) {
             setRawState('disconnected');
           }
+          reject(new Error('Voice session closed.'));
         };
       });
     })();
@@ -273,12 +286,10 @@ export function ReportVoiceAssistant({
   const sendContextUpdate = useCallback(
     async (sectionId: string | null) => {
       const socket = await connectSocket();
-      socket.send(
-        JSON.stringify({
-          type: 'context_update',
-          focused_section_id: sectionId ?? undefined,
-        })
-      );
+      sendSocketMessage(socket, {
+        type: 'context_update',
+        focused_section_id: sectionId ?? undefined,
+      });
     },
     [connectSocket]
   );
@@ -286,12 +297,10 @@ export function ReportVoiceAssistant({
   const sendTextTurn = useCallback(
     async (text: string) => {
       const socket = await connectSocket();
-      socket.send(
-        JSON.stringify({
-          type: 'text_turn',
-          text,
-        })
-      );
+      sendSocketMessage(socket, {
+        type: 'text_turn',
+        text,
+      });
     },
     [connectSocket]
   );
@@ -349,12 +358,10 @@ export function ReportVoiceAssistant({
       if (pcm16.length === 0) {
         return;
       }
-      openSocket.send(
-        JSON.stringify({
+      sendSocketMessage(openSocket, {
           type: 'audio_chunk',
           data: bytesToBase64(new Uint8Array(pcm16.buffer)),
-        })
-      );
+        });
     };
 
     source.connect(processor);
@@ -369,7 +376,7 @@ export function ReportVoiceAssistant({
       sink,
     };
 
-    socket.send(JSON.stringify({ type: 'audio_start' }));
+    sendSocketMessage(socket, { type: 'audio_start' });
     setRawState('listening');
   }, [connectSocket]);
 
@@ -785,6 +792,13 @@ function base64ToUint8Array(value: string): Uint8Array {
     output[index] = binary.charCodeAt(index);
   }
   return output;
+}
+
+function sendSocketMessage(socket: WebSocket, payload: unknown) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    throw new Error('Voice session is not connected.');
+  }
+  socket.send(JSON.stringify(payload));
 }
 
 function describeSection(section: ReportSection): string {

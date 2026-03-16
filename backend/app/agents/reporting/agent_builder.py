@@ -324,8 +324,11 @@ Rules:
   - side-by-side conflicting versions or scenes where the key visual fact is too uncertain
 - If a proposed media asset would mostly duplicate a clear real photo or video frame, skip it.
 - Do not be overly strict about evidence strength for mock/demo data, but the scene must still be concrete, spatially grounded, and genuinely useful.
-- Image requests need prompt text and citations.
-- Reconstruction requests need scene_description, evidence_refs, and citations.
+- Timeline events may already include visual_scene_spec. Preserve that structured scene spec when you select an event for media.
+- The backend will deterministically derive the final media prompt from visual_scene_spec. Your job is to select the right events and keep their grounding intact, not to write a generic final prompt.
+- If you do provide prompt or scene_description text, keep it short and factual because the backend may overwrite it with a richer grounded prompt.
+- Image requests need citations.
+- Reconstruction requests need evidence_refs and citations.
 - Image requests must use block_type=image.
 - Reconstruction requests must use block_type=video.
 - block_id values must be unique and anchor_block_id must match the eventual evidence text block id format: event-<event_id>.

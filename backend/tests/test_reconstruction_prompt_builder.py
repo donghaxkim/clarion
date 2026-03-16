@@ -34,3 +34,16 @@ def test_build_fallback_prompt_includes_no_text_guidance():
     prompt = build_fallback_prompt(_payload()).lower()
 
     assert "avoid any visible text" in prompt
+
+
+def test_build_prompt_uses_precomputed_prompt_when_available():
+    payload = _payload().model_copy(
+        update={
+            "prompt": "Create an evidence-grounded motion reconstruction with a black pickup truck in the left-turn lane and an eastbound sedan braking before impact.",
+        }
+    )
+
+    prompt = build_prompt(payload)
+
+    assert "black pickup truck" in prompt.lower()
+    assert "eastbound sedan" in prompt.lower()

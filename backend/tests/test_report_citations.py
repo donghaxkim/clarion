@@ -114,6 +114,38 @@ def test_normalize_report_document_strips_sparse_legacy_citations():
     assert normalized.sections[0].citations == []
 
 
+def test_normalize_report_document_keeps_last_duplicate_section_id():
+    report = ReportDocument(
+        report_id="report-1",
+        status=ReportStatus.completed,
+        sections=[
+            ReportBlock(
+                id="image-impact",
+                type=ReportBlockType.image,
+                title="Impact still",
+                content=None,
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+            ),
+            ReportBlock(
+                id="image-impact",
+                type=ReportBlockType.image,
+                title="Impact still",
+                content="Canonical prompt-bearing block",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+            ),
+        ],
+    )
+
+    normalized, changed = normalize_report_document(report)
+
+    assert changed is True
+    assert len(normalized.sections) == 1
+    assert normalized.sections[0].id == "image-impact"
+    assert normalized.sections[0].content == "Canonical prompt-bearing block"
+
+
 def test_validate_canonical_citations_rejects_blank_display_fields():
     try:
         validate_canonical_citations(

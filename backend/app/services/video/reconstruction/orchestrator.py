@@ -159,10 +159,19 @@ class ReconstructionArtifactService:
             "section_id": payload.section_id,
             "status": ReconstructionJobStatus.completed.value,
             "model_used": model_used,
+            "prompt": payload.prompt,
+            "prompt_source": payload.prompt_source,
+            "camera_mode": payload.camera_mode,
+            "negative_prompt": payload.negative_prompt,
             "duration_sec": payload.duration_sec,
             "aspect_ratio": payload.aspect_ratio.value,
             "evidence_refs": payload.evidence_refs,
             "reference_image_uris": payload.reference_image_uris,
+            "visual_scene_spec": (
+                payload.visual_scene_spec.model_dump(mode="json", exclude_none=True)
+                if payload.visual_scene_spec is not None
+                else None
+            ),
             "video_gcs_uri": video_gcs_uri,
             "created_at": datetime.now(UTC).isoformat(),
         }

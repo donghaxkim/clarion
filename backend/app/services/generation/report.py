@@ -9,6 +9,7 @@ from app.agents.reporting.types import (
     MediaRequest,
     PipelineResult,
 )
+from app.agents.reporting.validators import normalize_composer_output, sanitize_composer_output
 from app.models import (
     CaseEvidenceBundle,
     MediaAsset,
@@ -57,7 +58,12 @@ def create_preview_report(
     blocks: list[ReportBlock] = []
 
     if snapshot.composer_output is not None:
-        blocks.extend(_draft_to_block(block) for block in snapshot.composer_output.blocks)
+        composer_output = (
+            normalize_composer_output(snapshot.composer_output, snapshot.timeline_plan)
+            if snapshot.timeline_plan is not None
+            else sanitize_composer_output(snapshot.composer_output)
+        )
+        blocks.extend(_draft_to_block(block) for block in composer_output.blocks)
     elif snapshot.timeline_plan is not None:
         blocks.extend(_timeline_plan_to_preview_blocks(snapshot.timeline_plan))
         blocks.extend(_context_plan_to_preview_blocks(snapshot.context_plan))

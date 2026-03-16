@@ -43,6 +43,11 @@ from app.models.report_schema import (
     ReportWorkflowState,
     SectionType,
     SourceSpan,
+    VisualFactGrounding,
+    VisualSceneActor,
+    VisualSceneMotionBeat,
+    VisualSceneSpec,
+    VisualSceneStyle,
 )
 
 # Backward-compatible re-exports from the legacy schema so code that does
@@ -94,6 +99,11 @@ __all__ = [
     "ReportWorkflowState",
     "SectionType",
     "SourceSpan",
+    "VisualFactGrounding",
+    "VisualSceneActor",
+    "VisualSceneMotionBeat",
+    "VisualSceneSpec",
+    "VisualSceneStyle",
     # reconstruction
     "AspectRatio",
     "QualityMode",

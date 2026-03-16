@@ -29,21 +29,16 @@ def _require_env(name: str) -> str:
 
 
 async def run_report_worker(job_id: str) -> int:
-    from app.services.generation import ReportGenerationOrchestrator, ReportJobStore
+    from app.services.intelligence_worker import execute_report_job
 
-    store = ReportJobStore()
-    if not store.claim_job(job_id):
-        return 0
-    payload = store.load_request(job_id)
-    orchestrator = ReportGenerationOrchestrator(job_store=store)
-    await orchestrator.run_job(job_id, payload)
+    await execute_report_job(job_id)
     return 0
 
 
 async def run_analysis_worker(case_id: str, evidence_revision: int) -> int:
-    from app.services.case_service import case_workspace_service
+    from app.services.intelligence_worker import execute_case_analysis
 
-    case_workspace_service.run_analysis(case_id, expected_revision=evidence_revision)
+    execute_case_analysis(case_id, evidence_revision=evidence_revision)
     return 0
 
 

@@ -7,11 +7,13 @@ from app.agents.reporting.fallback import HeuristicReportingPipeline
 from app.agents.reporting.types import (
     MediaPlan,
     MediaRequest,
+    ComposerOutput,
+    ComposedBlockDraft,
     ReportGenerationPolicy,
     TimelineEvent,
     TimelinePlan,
 )
-from app.agents.reporting.validators import normalize_media_plan
+from app.agents.reporting.validators import normalize_composer_output, normalize_media_plan
 from app.models import (
     CaseEvidenceBundle,
     Citation,
@@ -20,7 +22,86 @@ from app.models import (
     EventCandidate,
     ReportBlockType,
     ReportProvenance,
+    VisualSceneActor,
+    VisualSceneMotionBeat,
+    VisualSceneSpec,
+    VisualSceneStyle,
 )
+from app.services.generation.media_prompting import PROMPT_SOURCE_SCENE_SPEC
+
+
+def _signal_scene_spec() -> VisualSceneSpec:
+    return VisualSceneSpec(
+        scene_key="signal-state",
+        visual_goal="show the signal state and vehicle placement before entry",
+        style=VisualSceneStyle.top_down_diagram,
+        camera_framing="top-down view of the intersection approaches",
+        actors=[
+            VisualSceneActor(
+                actor_id="pickup",
+                label="black pickup truck",
+                kind="pickup truck",
+                color="black",
+                travel_direction="westbound",
+                lane_position="left-turn lane",
+                evidence_refs=["ev-1"],
+            ),
+            VisualSceneActor(
+                actor_id="sedan",
+                label="sedan",
+                kind="sedan",
+                travel_direction="eastbound",
+                lane_position="through lane",
+                evidence_refs=["ev-1"],
+            ),
+        ],
+        traffic_control_details=["traffic signal showing yellow at vehicle entry"],
+        grounded_facts=["pickup waiting in the left-turn lane before turning"],
+        interpolated_details=["simple lane geometry with neutral roadway markings only where needed for orientation"],
+    )
+
+
+def _collision_scene_spec() -> VisualSceneSpec:
+    return VisualSceneSpec(
+        scene_key="collision-sequence",
+        visual_goal="show approach, turn, braking response, impact, and short post-impact motion",
+        style=VisualSceneStyle.grounded_motion,
+        camera_framing="steady elevated three-quarter view of the intersection",
+        actors=[
+            VisualSceneActor(
+                actor_id="pickup",
+                label="black pickup truck",
+                kind="pickup truck",
+                color="black",
+                lane_position="left-turn lane",
+                action="turning left across opposing traffic",
+                evidence_refs=["ev-2"],
+            ),
+            VisualSceneActor(
+                actor_id="sedan",
+                label="sedan",
+                kind="sedan",
+                travel_direction="eastbound",
+                action="braking immediately before impact",
+                evidence_refs=["ev-2"],
+            ),
+        ],
+        traffic_control_details=["traffic signal showing yellow at vehicle entry"],
+        grounded_facts=["front of the sedan strikes the passenger side of the pickup near the center of the intersection"],
+        motion_beats=[
+            VisualSceneMotionBeat(
+                order=1,
+                description="pickup waits in the left-turn lane while the sedan approaches",
+                evidence_refs=["ev-2"],
+            ),
+            VisualSceneMotionBeat(
+                order=2,
+                description="pickup turns left across the opposing lane and the sedan brakes before impact",
+                evidence_refs=["ev-2"],
+            ),
+        ],
+        interpolated_details=["single steady camera and simplified lane geometry only where needed for orientation"],
+    )
 
 
 def _bundle(with_candidates: bool = True) -> CaseEvidenceBundle:
@@ -60,6 +141,7 @@ def _bundle(with_candidates: bool = True) -> CaseEvidenceBundle:
                     "Top-down diagram of the traffic light state before the vehicles "
                     "entered the intersection."
                 ),
+                visual_scene_spec=_signal_scene_spec(),
                 public_context_queries=["intersection sight-distance standards"],
             ),
             EventCandidate(
@@ -78,6 +160,7 @@ def _bundle(with_candidates: bool = True) -> CaseEvidenceBundle:
                     )
                 ],
                 scene_description="A two-car collision viewed from a dashboard camera.",
+                visual_scene_spec=_collision_scene_spec(),
             ),
         ]
     return CaseEvidenceBundle(
@@ -110,6 +193,9 @@ def test_fallback_pipeline_uses_event_candidates_without_placeholder_public_cont
     assert len(result.reconstruction_requests) == 1
     assert result.image_requests[0].block_type == ReportBlockType.image
     assert result.reconstruction_requests[0].block_type == ReportBlockType.video
+    assert result.image_requests[0].prompt_source == PROMPT_SOURCE_SCENE_SPEC
+    assert result.reconstruction_requests[0].prompt_source == PROMPT_SOURCE_SCENE_SPEC
+    assert result.reconstruction_requests[0].negative_prompt
     assert all(
         citation.source_label and citation.excerpt
         for block in result.blocks
@@ -138,6 +224,7 @@ def test_fallback_pipeline_only_generates_media_from_explicit_candidate_fields()
                 sort_key="0001",
                 evidence_refs=["ev-1"],
                 image_prompt_hint="Top-down diagram of the traffic signal state before entry.",
+                visual_scene_spec=_signal_scene_spec(),
             ),
             EventCandidate(
                 event_id="video-only",
@@ -146,6 +233,7 @@ def test_fallback_pipeline_only_generates_media_from_explicit_candidate_fields()
                 sort_key="0002",
                 evidence_refs=["ev-1"],
                 scene_description="A neutral collision reconstruction showing the turning movement and impact.",
+                visual_scene_spec=_collision_scene_spec(),
             ),
         ],
     )
@@ -167,6 +255,8 @@ def test_fallback_pipeline_only_generates_media_from_explicit_candidate_fields()
     assert [request.block_id for request in result.reconstruction_requests] == [
         "event-video-only-video"
     ]
+    assert result.image_requests[0].prompt_source == PROMPT_SOURCE_SCENE_SPEC
+    assert result.reconstruction_requests[0].negative_prompt
 
 
 def test_fallback_pipeline_derives_timeline_when_event_candidates_missing():
@@ -213,6 +303,7 @@ def test_normalize_media_plan_filters_banned_images_and_keeps_spatial_clarifiers
                 evidence_refs=["ev-1"],
                 citations=[Citation(source_id="ev-1")],
                 image_prompt="Top-down diagram of the traffic light state before the collision.",
+                visual_scene_spec=_signal_scene_spec(),
             ),
             TimelineEvent(
                 event_id="impact",
@@ -222,6 +313,7 @@ def test_normalize_media_plan_filters_banned_images_and_keeps_spatial_clarifiers
                 evidence_refs=["ev-2"],
                 citations=[Citation(source_id="ev-2")],
                 scene_description="A two-car collision sequence through the intersection.",
+                visual_scene_spec=_collision_scene_spec(),
             ),
         ]
     )
@@ -285,6 +377,9 @@ def test_normalize_media_plan_filters_banned_images_and_keeps_spatial_clarifiers
     assert [request.block_id for request in normalized.reconstruction_requests] == [
         "event-impact-video"
     ]
+    assert normalized.image_requests[0].prompt_source == PROMPT_SOURCE_SCENE_SPEC
+    assert "black pickup truck" in normalized.image_requests[0].prompt.lower()
+    assert normalized.reconstruction_requests[0].negative_prompt
 
 
 def test_adk_context_agent_wraps_google_search_for_public_context():
@@ -353,3 +448,91 @@ def test_adk_loop_agents_keep_contents_for_repeat_iterations():
     assert grounding_refiner.include_contents == "default"
     assert composition_reviewer.include_contents == "default"
     assert composition_refiner.include_contents == "default"
+
+
+def test_normalize_composer_output_strips_media_blocks_and_dedupes_text_ids():
+    timeline = TimelinePlan(
+        timeline_events=[
+            TimelineEvent(
+                event_id="impact",
+                title="Impact",
+                narrative="Vehicles collide in the intersection.",
+                sort_key="0001",
+                evidence_refs=["ev-1"],
+                citations=[
+                    Citation(
+                        source_id="ev-1",
+                        segment_id="ev-1:fact:1",
+                        source_label="Witness Transcript",
+                        excerpt="The vehicles collided in the intersection.",
+                        provenance=ReportProvenance.evidence,
+                    )
+                ],
+            )
+        ]
+    )
+    output = ComposerOutput(
+        blocks=[
+            ComposedBlockDraft(
+                id="event-impact",
+                type=ReportBlockType.text,
+                title="Impact",
+                content="Earlier impact draft.",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                confidence_score=0.7,
+            ),
+            ComposedBlockDraft(
+                id="image-impact",
+                type=ReportBlockType.image,
+                title="Impact still",
+                content=None,
+                sort_key="0001.10",
+                provenance=ReportProvenance.evidence,
+                confidence_score=0.7,
+            ),
+            ComposedBlockDraft(
+                id="context-alpha",
+                type=ReportBlockType.text,
+                title="Bad context id",
+                content="Should be dropped.",
+                sort_key="0001.15",
+                provenance=ReportProvenance.public_context,
+                confidence_score=0.5,
+            ),
+            ComposedBlockDraft(
+                id="event-impact",
+                type=ReportBlockType.text,
+                title="Impact",
+                content="Final impact draft.",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                confidence_score=0.9,
+            ),
+            ComposedBlockDraft(
+                id="context-1",
+                type=ReportBlockType.text,
+                title="Public context",
+                content="Grounded context note.",
+                sort_key="0001.50",
+                provenance=ReportProvenance.public_context,
+                confidence_score=0.6,
+            ),
+            ComposedBlockDraft(
+                id="video-impact",
+                type=ReportBlockType.video,
+                title="Impact video",
+                content=None,
+                sort_key="0001.20",
+                provenance=ReportProvenance.evidence,
+                confidence_score=0.7,
+            ),
+        ]
+    )
+
+    normalized = normalize_composer_output(output, timeline)
+
+    assert [block.id for block in normalized.blocks] == ["event-impact", "context-1"]
+    assert all(block.type == ReportBlockType.text for block in normalized.blocks)
+    assert normalized.blocks[0].content == "Final impact draft."
+    assert normalized.blocks[0].citations[0].segment_id == "ev-1:fact:1"

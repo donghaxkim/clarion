@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 from app.agents.reporting.types import ComposerOutput, MediaPlan, MediaRequest, TimelineEvent, TimelinePlan
-from app.models import CaseEvidenceBundle, ReportProvenance
+from app.models import CaseEvidenceBundle, ReportBlockType, ReportProvenance, VisualSceneStyle
+from app.services.generation.media_prompting import normalize_media_request_from_scene_spec
 
 _MEDIA_DOCUMENT_HINTS = (
     "document",
@@ -98,6 +100,8 @@ _IMAGE_BAN_HINTS = _MEDIA_DOCUMENT_HINTS + _MEDIA_FILLER_HINTS + (
 )
 
 _RECONSTRUCTION_BAN_HINTS = _MEDIA_DOCUMENT_HINTS + _MEDIA_FILLER_HINTS
+_EVENT_BLOCK_ID_RE = re.compile(r"^event-[A-Za-z0-9_.:-]+$")
+_CONTEXT_BLOCK_ID_RE = re.compile(r"^context-\d+$")
 
 
 def validate_timeline_plan(bundle: CaseEvidenceBundle, plan: TimelinePlan) -> list[str]:
@@ -146,6 +150,12 @@ def validate_composer_output(output: ComposerOutput) -> list[str]:
         if previous_key and block.sort_key < previous_key:
             issues.append("report blocks must be sorted by sort_key")
         previous_key = block.sort_key
+        if block.type != ReportBlockType.text:
+            issues.append(f"{block.id} must be a text block in composer output")
+        if not _is_canonical_composer_block(block.id, provenance=block.provenance):
+            issues.append(
+                f"{block.id} is not a valid composer block id for {block.provenance.value}"
+            )
 
         for citation in block.citations:
             if citation.provenance != block.provenance:
@@ -160,6 +170,7 @@ def validate_composer_output(output: ComposerOutput) -> list[str]:
 
 
 def normalize_composer_output(output: ComposerOutput, timeline: TimelinePlan) -> ComposerOutput:
+    output = sanitize_composer_output(output)
     event_citation_lookup = {
         event.event_id: list(event.citations) for event in timeline.timeline_events if event.citations
     }
@@ -192,7 +203,32 @@ def normalize_composer_output(output: ComposerOutput, timeline: TimelinePlan) ->
     return output.model_copy(update={"blocks": updated_blocks})
 
 
-def normalize_media_plan(plan: MediaPlan, timeline: TimelinePlan) -> MediaPlan:
+def sanitize_composer_output(output: ComposerOutput) -> ComposerOutput:
+    deduped_blocks = []
+    seen_ids: set[str] = set()
+
+    for block in reversed(output.blocks):
+        if block.type != ReportBlockType.text:
+            continue
+        if not _is_canonical_composer_block(block.id, provenance=block.provenance):
+            continue
+        if block.id in seen_ids:
+            continue
+        seen_ids.add(block.id)
+        deduped_blocks.append(block)
+
+    deduped_blocks.reverse()
+    if deduped_blocks == output.blocks:
+        return output
+    return output.model_copy(update={"blocks": deduped_blocks})
+
+
+def normalize_media_plan(
+    plan: MediaPlan,
+    timeline: TimelinePlan,
+    *,
+    warnings: list[str] | None = None,
+) -> MediaPlan:
     event_lookup = {
         f"event-{event.event_id}": event for event in timeline.timeline_events
     }
@@ -200,11 +236,13 @@ def normalize_media_plan(plan: MediaPlan, timeline: TimelinePlan) -> MediaPlan:
         plan.image_requests,
         event_lookup=event_lookup,
         keep_request=_should_keep_image_request,
+        warnings=warnings,
     )
     reconstruction_requests = _normalize_media_requests(
         plan.reconstruction_requests,
         event_lookup=event_lookup,
         keep_request=_should_keep_reconstruction_request,
+        warnings=warnings,
     )
 
     if (
@@ -226,6 +264,7 @@ def _normalize_media_requests(
     *,
     event_lookup: dict[str, TimelineEvent],
     keep_request: Callable[[MediaRequest, TimelineEvent | None], bool],
+    warnings: list[str] | None = None,
 ) -> list[MediaRequest]:
     normalized: list[MediaRequest] = []
     seen_block_ids: set[str] = set()
@@ -235,10 +274,25 @@ def _normalize_media_requests(
             continue
         seen_block_ids.add(request.block_id)
         event = event_lookup.get(request.anchor_block_id)
+        request = _merge_request_visual_scene_spec(request, event)
+        request, warning = normalize_media_request_from_scene_spec(request, event)
+        if warning is not None and warnings is not None:
+            warnings.append(warning)
+        if request is None:
+            continue
         if keep_request(request, event):
             normalized.append(request)
 
     return normalized
+
+
+def _merge_request_visual_scene_spec(
+    request: MediaRequest,
+    event: TimelineEvent | None,
+) -> MediaRequest:
+    if request.visual_scene_spec is not None or event is None or event.visual_scene_spec is None:
+        return request
+    return request.model_copy(update={"visual_scene_spec": event.visual_scene_spec})
 
 
 def _should_keep_image_request(
@@ -246,6 +300,8 @@ def _should_keep_image_request(
     event: TimelineEvent | None,
 ) -> bool:
     if not request.prompt or not request.citations:
+        return False
+    if request.visual_scene_spec is not None and request.visual_scene_spec.style == VisualSceneStyle.grounded_motion:
         return False
 
     text = _media_request_text(request, event)
@@ -291,6 +347,12 @@ def _media_request_text(request: MediaRequest, event: TimelineEvent | None) -> s
 
 def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
     return any(hint in text for hint in hints)
+
+
+def _is_canonical_composer_block(block_id: str, *, provenance: ReportProvenance) -> bool:
+    if provenance == ReportProvenance.public_context:
+        return bool(_CONTEXT_BLOCK_ID_RE.match(block_id))
+    return bool(_EVENT_BLOCK_ID_RE.match(block_id))
 
 
 def _citation_is_grounded(citation) -> bool:

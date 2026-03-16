@@ -150,18 +150,21 @@ class AdkReportingPipeline:
         }
 
     def _result_from_state(self, state: dict[str, Any]) -> PipelineResult:
+        bundle = _model_from_state(state, CASE_BUNDLE_STATE, CaseEvidenceBundle)
         composer = _model_from_state(state, COMPOSER_STATE, ComposerOutput)
         timeline = _model_from_state(state, TIMELINE_PLAN_STATE, TimelinePlan)
+        timeline = _restore_timeline_scene_specs(bundle, timeline)
         composer = normalize_composer_output(composer, timeline)
         media_plan = _model_from_state(state, MEDIA_PLAN_STATE, MediaPlan)
-        media_plan = normalize_media_plan(media_plan, timeline)
+        warnings = _warnings_from_state(state)
+        media_plan = normalize_media_plan(media_plan, timeline, warnings=warnings)
         return PipelineResult(
             blocks=composer.blocks,
             image_requests=media_plan.image_requests[: self.policy.max_images],
             reconstruction_requests=media_plan.reconstruction_requests[
                 : self.policy.max_reconstructions
             ],
-            warnings=_warnings_from_state(state),
+            warnings=warnings,
         )
 
 
@@ -304,3 +307,32 @@ def _warnings_from_state(state: dict[str, Any]) -> list[str]:
     if value:
         return [str(value)]
     return []
+
+
+def _restore_timeline_scene_specs(
+    bundle: CaseEvidenceBundle,
+    timeline: TimelinePlan,
+) -> TimelinePlan:
+    candidate_lookup = {candidate.event_id: candidate for candidate in bundle.event_candidates}
+    updated_events = []
+    changed = False
+    for event in timeline.timeline_events:
+        candidate = candidate_lookup.get(event.event_id)
+        if candidate is None:
+            updated_events.append(event)
+            continue
+        updates: dict[str, Any] = {}
+        if event.visual_scene_spec is None and candidate.visual_scene_spec is not None:
+            updates["visual_scene_spec"] = candidate.visual_scene_spec
+        if event.scene_description is None and candidate.scene_description is not None:
+            updates["scene_description"] = candidate.scene_description
+        if event.image_prompt is None and candidate.image_prompt_hint is not None:
+            updates["image_prompt"] = candidate.image_prompt_hint
+        if not updates:
+            updated_events.append(event)
+            continue
+        changed = True
+        updated_events.append(event.model_copy(update=updates))
+    if not changed:
+        return timeline
+    return timeline.model_copy(update={"timeline_events": updated_events})

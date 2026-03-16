@@ -2,7 +2,14 @@ import asyncio
 import json
 
 from app.config import VEO_FAST_MODEL, VEO_FINAL_MODEL
-from app.models import QualityMode, ReconstructionJobRequest, ReconstructionJobStatus
+from app.models import (
+    QualityMode,
+    ReconstructionJobRequest,
+    ReconstructionJobStatus,
+    VisualSceneActor,
+    VisualSceneSpec,
+    VisualSceneStyle,
+)
 from app.services.video.reconstruction.job_store import ReconstructionJobStore
 from app.services.video.reconstruction.orchestrator import ReconstructionOrchestrator
 
@@ -48,8 +55,26 @@ def _payload(**overrides) -> ReconstructionJobRequest:
         "case_id": "case_456",
         "section_id": "section_9",
         "scene_description": "Vehicle A rear-ends Vehicle B in stop-and-go traffic.",
+        "prompt": "Create an evidence-grounded motion reconstruction with a black sedan braking into the rear of the pickup truck in stop-and-go traffic.",
+        "prompt_source": "scene_spec_v1",
+        "camera_mode": "grounded_motion",
         "evidence_refs": ["ev_10", "ev_11"],
         "reference_image_uris": ["gs://clarion-uploads/ref_a.jpg"],
+        "visual_scene_spec": VisualSceneSpec(
+            scene_key="rear-end",
+            visual_goal="show approach, braking, and rear-end impact in stop-and-go traffic",
+            style=VisualSceneStyle.grounded_motion,
+            camera_framing="steady elevated roadside view",
+            actors=[
+                VisualSceneActor(
+                    actor_id="sedan",
+                    label="black sedan",
+                    kind="sedan",
+                    color="black",
+                    evidence_refs=["ev_10"],
+                )
+            ],
+        ),
         "duration_sec": 8,
         "aspect_ratio": "16:9",
         "negative_prompt": "no explosions",
@@ -110,6 +135,11 @@ def test_fast_only_mode_performs_single_veo_call_and_writes_manifest(tmp_path):
     manifest_key = f"reconstructions/{payload.case_id}/{job.job_id}/manifest.json"
     manifest_payload = json.loads(uploads[manifest_key]["data"].decode("utf-8"))
     assert manifest_payload["evidence_refs"] == payload.evidence_refs
+    assert manifest_payload["prompt"] == payload.prompt
+    assert manifest_payload["negative_prompt"] == payload.negative_prompt
+    assert manifest_payload["prompt_source"] == payload.prompt_source
+    assert manifest_payload["camera_mode"] == payload.camera_mode
+    assert manifest_payload["visual_scene_spec"]["scene_key"] == "rear-end"
 
 
 def test_fast_then_final_mode_performs_two_veo_calls(tmp_path):

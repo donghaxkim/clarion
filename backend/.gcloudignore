@@ -3,6 +3,7 @@
 .gitignore
 .env
 cloudrun.env.yaml
+cloudrun.worker.env.yaml
 .venv/
 venv/
 __pycache__/

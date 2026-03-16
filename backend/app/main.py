@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import cases, edit, export, generate, reconstruction, system, upload, voice
+from app.config import CLARION_SERVICE_MODE
+from app.routers import cases, edit, export, generate, internal, reconstruction, system, upload, voice
 
 app = FastAPI(
     title="Clarion API",
@@ -19,11 +20,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(upload.router, prefix="/upload", tags=["upload"])
-app.include_router(generate.router, prefix="/generate", tags=["generate"])
-app.include_router(edit.router, prefix="/edit", tags=["edit"])
-app.include_router(export.router, prefix="/export", tags=["export"])
-app.include_router(reconstruction.router, prefix="/reconstruction", tags=["reconstruction"])
-app.include_router(cases.router, prefix="/cases", tags=["cases"])
-app.include_router(voice.router, prefix="/voice", tags=["voice"])
+app.state.service_mode = CLARION_SERVICE_MODE
+
+if CLARION_SERVICE_MODE in {"all", "api"}:
+    app.include_router(upload.router, prefix="/upload", tags=["upload"])
+    app.include_router(generate.router, prefix="/generate", tags=["generate"])
+    app.include_router(edit.router, prefix="/edit", tags=["edit"])
+    app.include_router(export.router, prefix="/export", tags=["export"])
+    app.include_router(reconstruction.router, prefix="/reconstruction", tags=["reconstruction"])
+    app.include_router(cases.router, prefix="/cases", tags=["cases"])
+    app.include_router(voice.router, prefix="/voice", tags=["voice"])
+
+if CLARION_SERVICE_MODE in {"all", "worker"}:
+    app.include_router(internal.router, prefix="/internal", tags=["internal"])
+
 app.include_router(system.router, tags=["system"])

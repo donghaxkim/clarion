@@ -283,3 +283,66 @@ def test_report_endpoints_upgrade_sparse_citations_and_persist_the_upgrade(monke
     persisted = store.get_report(report.report_id)
     assert persisted is not None
     assert persisted.sections[0].citations == []
+
+
+def test_report_endpoints_dedupe_duplicate_sections_and_persist_the_upgrade(monkeypatch, tmp_path):
+    store = ReportJobStore(str(tmp_path / "jobs.json"))
+    dispatcher = _RecordingDispatcher()
+    monkeypatch.setattr(generate, "job_store", store)
+    monkeypatch.setattr(generate, "dispatcher", dispatcher)
+    monkeypatch.setattr(generate, "materialize_browser_uri", lambda uri, *, base_url=None: uri)
+
+    report = ReportDocument(
+        report_id="report-router",
+        status=ReportStatus.completed,
+        sections=[
+            ReportBlock(
+                id="image-impact",
+                type="image",
+                title="Impact Still",
+                content=None,
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                media=[
+                    MediaAsset(
+                        kind=MediaAssetKind.image,
+                        uri="gs://test-bucket/reports/report-router/media/impact.png",
+                        generator="gemini-image",
+                        manifest_uri="gs://test-bucket/reports/report-router/media/impact.manifest.json",
+                        state=ReportBlockState.ready,
+                    )
+                ],
+            ),
+            ReportBlock(
+                id="image-impact",
+                type="image",
+                title="Impact Still",
+                content="Canonical prompt-bearing block",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                media=[
+                    MediaAsset(
+                        kind=MediaAssetKind.image,
+                        uri="gs://test-bucket/reports/report-router/media/impact.png",
+                        generator="gemini-image",
+                        manifest_uri="gs://test-bucket/reports/report-router/media/impact.manifest.json",
+                        state=ReportBlockState.ready,
+                    )
+                ],
+            ),
+        ],
+    )
+    job = store.create_job(report=report)
+
+    client = TestClient(app)
+    response = client.get(f"/generate/reports/{report.report_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [section["id"] for section in body["sections"]] == ["image-impact"]
+    assert body["sections"][0]["content"] == "Canonical prompt-bearing block"
+
+    persisted = store.get_report(report.report_id)
+    assert persisted is not None
+    assert len(persisted.sections) == 1
+    assert persisted.sections[0].content == "Canonical prompt-bearing block"

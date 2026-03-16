@@ -69,9 +69,12 @@ def normalize_report_document(
     bundle: CaseEvidenceBundle | None = None,
 ) -> tuple[ReportDocument, bool]:
     changed = False
+    deduped_sections = _dedupe_sections(report.sections)
+    if deduped_sections != report.sections:
+        changed = True
     sections = []
 
-    for block in report.sections:
+    for block in deduped_sections:
         fallback_excerpt = block.content or block.title
         citations, citations_changed = normalize_citations(
             block.citations,
@@ -183,6 +186,18 @@ def _evidence_lookup(bundle: CaseEvidenceBundle | None) -> dict[str, EvidenceIte
     if bundle is None:
         return {}
     return {item.evidence_id: item for item in bundle.evidence_items}
+
+
+def _dedupe_sections(sections):
+    deduped = []
+    seen_ids: set[str] = set()
+    for block in reversed(sections):
+        if block.id in seen_ids:
+            continue
+        seen_ids.add(block.id)
+        deduped.append(block)
+    deduped.reverse()
+    return deduped
 
 
 def _evidence_source_label(evidence: EvidenceItem | None) -> str | None:

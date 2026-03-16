@@ -72,6 +72,17 @@ class MediaAssetKind(str, Enum):
     video = "video"
 
 
+class VisualSceneStyle(str, Enum):
+    top_down_diagram = "top_down_diagram"
+    witness_view = "witness_view"
+    grounded_motion = "grounded_motion"
+
+
+class VisualFactGrounding(str, Enum):
+    grounded = "grounded"
+    interpolated = "interpolated"
+
+
 class ReportWorkflowNodeKind(str, Enum):
     agent = "agent"
     worker = "worker"
@@ -131,6 +142,61 @@ class EvidenceItem(BaseModel):
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
+class VisualSceneActor(BaseModel):
+    actor_id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    color: Optional[str] = None
+    travel_direction: Optional[str] = None
+    lane_position: Optional[str] = None
+    relative_position: Optional[str] = None
+    signal_state: Optional[str] = None
+    action: Optional[str] = None
+    grounding: VisualFactGrounding = VisualFactGrounding.grounded
+    evidence_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("evidence_refs")
+    @classmethod
+    def strip_actor_refs(cls, values: list[str]) -> list[str]:
+        return [value.strip() for value in values if value and value.strip()]
+
+
+class VisualSceneMotionBeat(BaseModel):
+    order: int = Field(ge=1)
+    description: str = Field(min_length=1)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("evidence_refs")
+    @classmethod
+    def strip_motion_refs(cls, values: list[str]) -> list[str]:
+        return [value.strip() for value in values if value and value.strip()]
+
+
+class VisualSceneSpec(BaseModel):
+    scene_key: str = Field(min_length=1)
+    visual_goal: str = Field(min_length=1)
+    style: VisualSceneStyle
+    camera_framing: str = Field(min_length=1)
+    actors: list[VisualSceneActor] = Field(default_factory=list)
+    environment_details: list[str] = Field(default_factory=list)
+    traffic_control_details: list[str] = Field(default_factory=list)
+    grounded_facts: list[str] = Field(default_factory=list)
+    interpolated_details: list[str] = Field(default_factory=list)
+    motion_beats: list[VisualSceneMotionBeat] = Field(default_factory=list)
+    negative_prompt_tags: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "environment_details",
+        "traffic_control_details",
+        "grounded_facts",
+        "interpolated_details",
+        "negative_prompt_tags",
+    )
+    @classmethod
+    def strip_spec_lists(cls, values: list[str]) -> list[str]:
+        return [value.strip() for value in values if value and value.strip()]
+
+
 class EventCandidate(BaseModel):
     event_id: str = Field(min_length=1)
     title: str = Field(min_length=1)
@@ -141,6 +207,7 @@ class EventCandidate(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     scene_description: Optional[str] = None
     image_prompt_hint: Optional[str] = None
+    visual_scene_spec: Optional[VisualSceneSpec] = None
     reference_image_uris: list[str] = Field(default_factory=list, max_length=3)
     public_context_queries: list[str] = Field(default_factory=list, max_length=3)
 

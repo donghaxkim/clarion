@@ -13,6 +13,11 @@ from app.models import (
     EvidenceItem as ReportEvidenceItem,
     EvidenceItemType,
     SourceSpan,
+    VisualFactGrounding,
+    VisualSceneActor,
+    VisualSceneMotionBeat,
+    VisualSceneSpec,
+    VisualSceneStyle,
 )
 from app.models.schema import CaseFile, Entity, EvidenceItem as LegacyEvidenceItem
 from app.services.generation.report_citations import build_evidence_citation
@@ -77,9 +82,13 @@ class SceneDefinition:
     sort_key: str
     title: str
     matchers: tuple[str, ...]
+    visual_goal: str
+    style: VisualSceneStyle
+    camera_framing: str
     image_prompt_hint: str | None = None
     scene_direction: str | None = None
     public_context_queries: tuple[str, ...] = ()
+    negative_prompt_tags: tuple[str, ...] = ()
 
 
 _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
@@ -87,6 +96,11 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
         key="signal_state",
         sort_key="0010",
         title="Traffic signal state before entry",
+        visual_goal=(
+            "show the signal state and the vehicles' relative placement immediately before entry into the conflict area"
+        ),
+        style=VisualSceneStyle.top_down_diagram,
+        camera_framing="top-down view of the full signalized intersection and approach lanes just before entry",
         matchers=(
             "yellow light",
             "green light",
@@ -103,11 +117,17 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
             "immediately before entry."
         ),
         public_context_queries=("signalized intersection traffic-control context",),
+        negative_prompt_tags=("no map pins", "no street-name labels"),
     ),
     SceneDefinition(
         key="witness_viewpoint",
         sort_key="0020",
         title="Witness viewpoint and line of sight",
+        visual_goal=(
+            "show what the witness could see toward the conflict area from the described observation point"
+        ),
+        style=VisualSceneStyle.witness_view,
+        camera_framing="eye-level witness-view framing toward the intersection and conflict area",
         matchers=(
             "clear view",
             "unobstructed view",
@@ -123,11 +143,17 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
             "point, showing the relevant lanes and what was visible toward the conflict area."
         ),
         public_context_queries=("line-of-sight and visibility context for a roadway witness viewpoint",),
+        negative_prompt_tags=("no fisheye distortion", "no dramatic depth of field"),
     ),
     SceneDefinition(
         key="pre_impact_positioning",
         sort_key="0030",
         title="Pre-impact vehicle positioning",
+        visual_goal=(
+            "show the vehicles' lane placement and orientations immediately before the turning movement and entry"
+        ),
+        style=VisualSceneStyle.top_down_diagram,
+        camera_framing="top-down diagrammatic view centered on the approach lanes and stop line",
         matchers=(
             "left-turn lane",
             "left-turn pocket",
@@ -145,11 +171,17 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
             "Text-free, diagrammatic top-down still showing the relevant vehicles' lane "
             "positions and static placement immediately before the turn and entry."
         ),
+        negative_prompt_tags=("no decorative buildings",),
     ),
     SceneDefinition(
         key="collision_sequence",
         sort_key="0040",
         title="Collision sequence",
+        visual_goal=(
+            "show the approach, turn, braking response, impact, and only the short post-impact motion needed to explain the mechanics"
+        ),
+        style=VisualSceneStyle.grounded_motion,
+        camera_framing="steady elevated three-quarter view that keeps both vehicle paths and the impact area visible",
         matchers=(
             "turned left across",
             "started its left turn",
@@ -171,11 +203,15 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
             "to explain the mechanics. Keep timing, spacing, and movement neutral and "
             "physically plausible, with no text or cinematic embellishment."
         ),
+        negative_prompt_tags=("no drifting", "no crash debris", "no slow-motion effects"),
     ),
     SceneDefinition(
         key="impact_location",
         sort_key="0050",
         title="Impact location in the intersection",
+        visual_goal="show the point of impact and both vehicle orientations at contact",
+        style=VisualSceneStyle.top_down_diagram,
+        camera_framing="top-down diagrammatic view centered on the conflict point in the intersection",
         matchers=(
             "near the center of the intersection",
             "middle of the intersection",
@@ -189,11 +225,15 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
             "Text-free, diagrammatic top-down still showing the point of impact in the "
             "intersection and each vehicle's orientation at contact."
         ),
+        negative_prompt_tags=("no debris field",),
     ),
     SceneDefinition(
         key="post_impact_positions",
         sort_key="0060",
         title="Post-impact resting positions",
+        visual_goal="show the vehicles' final post-impact resting positions relative to the intersection",
+        style=VisualSceneStyle.top_down_diagram,
+        camera_framing="top-down diagrammatic view covering the intersection and final resting positions",
         matchers=(
             "after the crash",
             "after impact",
@@ -207,6 +247,7 @@ _SCENE_DEFINITIONS: tuple[SceneDefinition, ...] = (
             "Text-free, diagrammatic top-down still showing the vehicles' final post-impact "
             "positions relative to the intersection."
         ),
+        negative_prompt_tags=("no emergency responders", "no tow trucks"),
     ),
 )
 
@@ -276,6 +317,11 @@ def derive_scene_event_candidates(evidence_items: list[ReportEvidenceItem]) -> l
                     else None
                 ),
                 image_prompt_hint=definition.image_prompt_hint,
+                visual_scene_spec=_build_visual_scene_spec(
+                    definition,
+                    cues,
+                    evidence_items=evidence_items,
+                ),
                 reference_image_uris=_reference_image_uris(evidence_items, evidence_refs),
                 public_context_queries=list(definition.public_context_queries),
             )
@@ -524,6 +570,40 @@ def _build_reconstruction_description(definition: SceneDefinition, cues: list[Sc
     return definition.scene_direction or ""
 
 
+def _build_visual_scene_spec(
+    definition: SceneDefinition,
+    cues: list[SceneCue],
+    *,
+    evidence_items: list[ReportEvidenceItem],
+) -> VisualSceneSpec:
+    evidence_refs = _ordered_evidence_refs(cues)
+    relevant_items = [item for item in evidence_items if item.evidence_id in set(evidence_refs)]
+    actors = _extract_scene_actors(
+        definition,
+        cues,
+        relevant_items,
+        evidence_refs=evidence_refs,
+    )
+    environment_details = _extract_environment_details(relevant_items)
+    traffic_control_details = _extract_traffic_control_details(definition, cues, relevant_items)
+    grounded_facts = _extract_grounded_visual_facts(cues)
+    motion_beats = _build_motion_beats(definition, cues)
+
+    return VisualSceneSpec(
+        scene_key=definition.key,
+        visual_goal=definition.visual_goal,
+        style=definition.style,
+        camera_framing=definition.camera_framing,
+        actors=actors,
+        environment_details=environment_details,
+        traffic_control_details=traffic_control_details,
+        grounded_facts=grounded_facts,
+        interpolated_details=_interpolated_details(definition),
+        motion_beats=motion_beats,
+        negative_prompt_tags=list(definition.negative_prompt_tags),
+    )
+
+
 def _top_cue_texts(cues: list[SceneCue], *, limit: int = 3) -> list[str]:
     preferred = _preferred_summary_cues(cues)
     fragments: list[str] = []
@@ -537,6 +617,134 @@ def _top_cue_texts(cues: list[SceneCue], *, limit: int = 3) -> list[str]:
         if len(fragments) >= limit:
             break
     return fragments
+
+
+def _extract_scene_actors(
+    definition: SceneDefinition,
+    cues: list[SceneCue],
+    evidence_items: list[ReportEvidenceItem],
+    *,
+    evidence_refs: list[str],
+) -> list[VisualSceneActor]:
+    del definition
+    text_fragments = [cue.text for cue in cues] + [cue.excerpt for cue in cues]
+    text_fragments.extend(
+        _relevant_sentences_for_visuals(item.extracted_text or "")
+        for item in evidence_items
+    )
+    flattened_fragments: list[str] = []
+    for fragment in text_fragments:
+        if isinstance(fragment, list):
+            flattened_fragments.extend(fragment)
+        elif fragment:
+            flattened_fragments.append(str(fragment))
+
+    actor_specs = (
+        ("pickup", ("pickup truck", "pickup"), "pickup truck"),
+        ("sedan", ("sedan",), "sedan"),
+        ("suv", ("suv",), "suv"),
+        ("witness", ("witness", "i had a clear view", "observation point"), "witness"),
+    )
+
+    actors: list[VisualSceneActor] = []
+    for actor_id, matchers, default_kind in actor_specs:
+        actor_fragments = [
+            fragment
+            for fragment in flattened_fragments
+            if any(matcher in fragment.lower() for matcher in matchers)
+        ]
+        if not actor_fragments:
+            continue
+        label = _actor_label(actor_id, actor_fragments)
+        actors.append(
+            VisualSceneActor(
+                actor_id=actor_id,
+                label=label,
+                kind=_actor_kind(default_kind, actor_fragments),
+                color=_first_match(actor_fragments, _COLOR_PATTERNS),
+                travel_direction=_first_direction(actor_fragments),
+                lane_position=_first_lane_position(actor_fragments),
+                relative_position=_first_relative_position(actor_fragments),
+                signal_state=_first_signal_state(actor_fragments),
+                action=_first_action(actor_fragments),
+                grounding=VisualFactGrounding.grounded,
+                evidence_refs=evidence_refs,
+            )
+        )
+
+    return actors
+
+
+def _extract_environment_details(evidence_items: list[ReportEvidenceItem]) -> list[str]:
+    details: list[str] = []
+    for item in evidence_items:
+        text = (item.extracted_text or "").lower()
+        if "clear view" in text or "nothing was blocking my view" in text or "direct line of sight" in text:
+            details.append("clear line of sight from the witness observation point")
+        if "southeast corner bus stop" in text:
+            details.append("witness positioned at the southeast corner bus stop")
+        if "marked crosswalk" in text:
+            details.append("marked crosswalk near the witness observation point")
+        if "night" in text or "9:18 pm" in text:
+            details.append("nighttime conditions")
+        if "weather was clear" in text:
+            details.append("clear weather conditions")
+        if "pavement was dry" in text or "dry pavement" in text:
+            details.append("dry pavement")
+    return _unique_strings(details)
+
+
+def _extract_traffic_control_details(
+    definition: SceneDefinition,
+    cues: list[SceneCue],
+    evidence_items: list[ReportEvidenceItem],
+) -> list[str]:
+    del definition
+    details: list[str] = []
+    for cue in cues:
+        lowered = cue.text.lower()
+        if "yellow" in lowered and "light" in lowered:
+            details.append("traffic signal showing yellow at vehicle entry")
+        if "green" in lowered and "light" in lowered:
+            details.append("traffic signal showing green before the turn sequence")
+        if "red" in lowered and "light" in lowered:
+            details.append("traffic signal showing red")
+    combined_text = " ".join((item.extracted_text or "") for item in evidence_items).lower()
+    if "signalized intersection" in combined_text or "traffic light" in combined_text or "light for" in combined_text:
+        details.append("signalized intersection control")
+    return _unique_strings(details)
+
+
+def _extract_grounded_visual_facts(cues: list[SceneCue]) -> list[str]:
+    facts = [_strip_terminal_period(cue.text) for cue in _preferred_summary_cues(cues)]
+    return _unique_strings(facts[:5])
+
+
+def _build_motion_beats(
+    definition: SceneDefinition,
+    cues: list[SceneCue],
+) -> list[VisualSceneMotionBeat]:
+    if definition.style != VisualSceneStyle.grounded_motion:
+        return []
+
+    beats: list[VisualSceneMotionBeat] = []
+    for index, cue in enumerate(_preferred_summary_cues(cues)[:5], start=1):
+        beats.append(
+            VisualSceneMotionBeat(
+                order=index,
+                description=_strip_terminal_period(cue.text),
+                evidence_refs=[cue.evidence_id],
+            )
+        )
+    return beats
+
+
+def _interpolated_details(definition: SceneDefinition) -> list[str]:
+    if definition.style == VisualSceneStyle.witness_view:
+        return ["neutral eye-level witness framing based on the described observation point"]
+    if definition.style == VisualSceneStyle.grounded_motion:
+        return ["single steady camera and simplified lane geometry only where needed for orientation"]
+    return ["simple lane geometry with neutral roadway markings only where needed for orientation"]
 
 
 def _reference_image_uris(
@@ -554,6 +762,32 @@ def _reference_image_uris(
         if len(uris) >= 3:
             break
     return uris
+
+
+def _relevant_sentences_for_visuals(text: str) -> list[str]:
+    return [
+        fragment
+        for fragment in _text_fragments(text)
+        if any(
+            hint in fragment.lower()
+            for hint in (
+                "pickup",
+                "sedan",
+                "suv",
+                "vehicle",
+                "signal",
+                "light",
+                "intersection",
+                "lane",
+                "turn",
+                "impact",
+                "brake",
+                "rest",
+                "crosswalk",
+                "view",
+            )
+        )
+    ]
 
 
 def _join_summary(prefix: str, fragments: list[str]) -> str:
@@ -585,6 +819,131 @@ def _candidate_citations(cues: list[SceneCue], *, limit: int = 3) -> list[Citati
         if len(citations) >= limit:
             break
     return citations
+
+
+_COLOR_PATTERNS = ("black", "red", "white", "silver", "gray", "grey", "blue")
+_LANE_PATTERNS = (
+    "left-turn lane",
+    "left-turn pocket",
+    "turn pocket",
+    "right-turn lane",
+    "eastbound lane",
+    "westbound lane",
+    "northbound lane",
+    "southbound lane",
+    "inside westbound lane",
+)
+_RELATIVE_POSITION_PATTERNS = (
+    "near the center of the intersection",
+    "middle of the intersection",
+    "slightly east of center",
+    "toward the northeast side",
+    "angled more to the south than west",
+    "passenger side area",
+    "passenger-side front door area",
+)
+_ACTION_PATTERNS = (
+    ("waiting", "waiting in the left-turn lane"),
+    ("sitting", "stopped in the left-turn lane"),
+    ("crept forward", "creeping forward before the turn"),
+    ("started its left turn", "initiating a left turn"),
+    ("turned left", "turning left across opposing traffic"),
+    ("approaching", "approaching the intersection"),
+    ("continued through", "continuing through the intersection"),
+    ("hit its brakes", "braking immediately before impact"),
+    ("braked late", "braking late before impact"),
+    ("struck", "striking the opposing vehicle"),
+    ("rolled toward", "rolling after impact"),
+    ("came to rest", "coming to rest after impact"),
+)
+
+
+def _actor_label(actor_id: str, fragments: list[str]) -> str:
+    color = _first_match(fragments, _COLOR_PATTERNS)
+    if actor_id == "pickup":
+        return f"{color} pickup truck".strip() if color else "pickup truck"
+    if actor_id == "sedan":
+        return f"{color} sedan".strip() if color else "sedan"
+    if actor_id == "suv":
+        return f"{color} SUV".strip() if color else "SUV"
+    return "witness"
+
+
+def _actor_kind(default_kind: str, fragments: list[str]) -> str:
+    lowered = " ".join(fragments).lower()
+    if "pickup truck" in lowered:
+        return "pickup truck"
+    if "pickup" in lowered:
+        return "pickup truck"
+    return default_kind
+
+
+def _first_match(fragments: list[str], choices: tuple[str, ...]) -> str | None:
+    combined = " ".join(fragment.lower() for fragment in fragments)
+    for choice in choices:
+        if choice in combined:
+            return choice
+    return None
+
+
+def _first_direction(fragments: list[str]) -> str | None:
+    combined = " ".join(fragment.lower() for fragment in fragments)
+    for direction in ("northbound", "southbound", "eastbound", "westbound"):
+        if direction in combined:
+            return direction
+    if "go south" in combined or "turn to go south" in combined:
+        return "southbound"
+    if "go north" in combined:
+        return "northbound"
+    return None
+
+
+def _first_lane_position(fragments: list[str]) -> str | None:
+    combined = " ".join(fragments).lower()
+    for pattern in _LANE_PATTERNS:
+        if pattern in combined:
+            return pattern
+    return None
+
+
+def _first_relative_position(fragments: list[str]) -> str | None:
+    combined = " ".join(fragments).lower()
+    for pattern in _RELATIVE_POSITION_PATTERNS:
+        if pattern in combined:
+            return pattern
+    return None
+
+
+def _first_signal_state(fragments: list[str]) -> str | None:
+    combined = " ".join(fragments).lower()
+    for state in ("yellow", "green", "red"):
+        if state in combined and ("light" in combined or "signal" in combined):
+            return state
+    return None
+
+
+def _first_action(fragments: list[str]) -> str | None:
+    combined = " ".join(fragments).lower()
+    for matcher, label in _ACTION_PATTERNS:
+        if matcher in combined:
+            return label
+    return None
+
+
+def _strip_terminal_period(value: str) -> str:
+    return value.strip().rstrip(".!?")
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _normalize_scene_text(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(value.strip())
+    return cleaned
 
 
 def _preferred_summary_cues(cues: list[SceneCue]) -> list[SceneCue]:

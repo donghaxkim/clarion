@@ -1,17 +1,19 @@
 import 'server-only';
 
-const clarionApiBaseUrl = (
-  process.env.CLARION_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  'http://127.0.0.1:8000'
-).replace(/\/$/, '');
+function resolveClarionApiBaseUrl(): string {
+  return (
+    process.env.CLARION_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    'http://127.0.0.1:8000'
+  ).replace(/\/$/, '');
+}
 
 export function getClarionApiBaseUrl(): string {
-  return clarionApiBaseUrl;
+  return resolveClarionApiBaseUrl();
 }
 
 export function getClarionWebSocketBaseUrl(): string {
-  const url = new URL(clarionApiBaseUrl);
+  const url = new URL(resolveClarionApiBaseUrl());
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString().replace(/\/$/, '');
 }
@@ -30,6 +32,7 @@ export async function fetchClarion(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  const clarionApiBaseUrl = resolveClarionApiBaseUrl();
   const headers = new Headers(init.headers);
   if (!headers.has('Accept')) {
     headers.set('Accept', 'application/json');

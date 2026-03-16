@@ -1,4 +1,5 @@
 from app.models.schema import CaseFile, Entity, EvidenceItem, ExtractedContent, MediaRef, SourceLocation
+from app.models import VisualSceneStyle
 from app.services.report_bundle_adapter import build_case_evidence_bundle
 
 
@@ -230,6 +231,23 @@ def test_build_case_evidence_bundle_enriches_evidence_and_curates_scene_candidat
     assert candidate_lookup["collision_sequence"].image_prompt_hint is None
     assert candidate_lookup["signal_state"].image_prompt_hint
     assert candidate_lookup["signal_state"].scene_description is None
+    assert candidate_lookup["signal_state"].visual_scene_spec is not None
+    assert candidate_lookup["signal_state"].visual_scene_spec.style == VisualSceneStyle.top_down_diagram
+    assert any(
+        actor.label.lower().endswith("pickup truck")
+        for actor in candidate_lookup["signal_state"].visual_scene_spec.actors
+    )
+    assert any(
+        actor.label.lower().endswith("sedan")
+        for actor in candidate_lookup["signal_state"].visual_scene_spec.actors
+    )
+    assert any(
+        "yellow" in detail.lower()
+        for detail in candidate_lookup["signal_state"].visual_scene_spec.traffic_control_details
+    )
+    assert candidate_lookup["collision_sequence"].visual_scene_spec is not None
+    assert candidate_lookup["collision_sequence"].visual_scene_spec.style == VisualSceneStyle.grounded_motion
+    assert candidate_lookup["collision_sequence"].visual_scene_spec.motion_beats
     assert set(candidate_lookup["collision_sequence"].evidence_refs) == {"ev_pamela", "ev_marcus"}
     assert candidate_lookup["signal_state"].timestamp_label == "9:18 PM, February 18, 2026"
     assert candidate_lookup["collision_sequence"].citations
@@ -280,6 +298,12 @@ def test_scene_candidates_create_deterministic_fragment_spans_when_only_raw_text
     assert collision.citations[0].segment_id.startswith("ev_fragment:scene:")
     assert collision.citations[0].excerpt == (
         "The eastbound sedan struck the passenger side of the pickup near the center of the intersection."
+    )
+    assert collision.visual_scene_spec is not None
+    assert collision.visual_scene_spec.motion_beats
+    assert any(
+        "passenger side of the pickup" in beat.description.lower()
+        for beat in collision.visual_scene_spec.motion_beats
     )
     stored_spans = {
         span.segment_id: span.snippet

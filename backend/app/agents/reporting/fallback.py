@@ -51,6 +51,7 @@ class HeuristicReportingPipeline:
     ):
         self.policy = policy
         self.warning_message = warning_message or self.DEFAULT_WARNING_MESSAGE
+        self._media_warnings: list[str] = []
 
     async def run(
         self,
@@ -62,6 +63,7 @@ class HeuristicReportingPipeline:
     ) -> PipelineResult:
         del report_id, user_id
         preview_snapshot = PipelinePreviewSnapshot()
+        self._media_warnings = []
 
         await _emit_progress(
             progress_callback,
@@ -171,7 +173,7 @@ class HeuristicReportingPipeline:
             blocks=blocks,
             image_requests=image_requests,
             reconstruction_requests=reconstruction_requests,
-            warnings=[self.warning_message],
+            warnings=[self.warning_message, *self._media_warnings],
         )
 
     def _build_timeline(self, bundle: CaseEvidenceBundle) -> TimelinePlan:
@@ -222,6 +224,7 @@ class HeuristicReportingPipeline:
             citations=citations,
             scene_description=candidate.scene_description,
             image_prompt=candidate.image_prompt_hint,
+            visual_scene_spec=candidate.visual_scene_spec,
             reference_image_uris=candidate.reference_image_uris,
             public_context_queries=candidate.public_context_queries,
             confidence_score=0.72,
@@ -295,6 +298,7 @@ class HeuristicReportingPipeline:
                         citations=event.citations,
                         confidence_score=block.confidence_score,
                         prompt=event.image_prompt,
+                        visual_scene_spec=event.visual_scene_spec,
                         evidence_refs=event.evidence_refs,
                         reference_image_uris=event.reference_image_uris,
                     )
@@ -311,18 +315,22 @@ class HeuristicReportingPipeline:
                         citations=event.citations,
                         confidence_score=block.confidence_score,
                         scene_description=event.scene_description,
+                        visual_scene_spec=event.visual_scene_spec,
                         evidence_refs=event.evidence_refs,
                         reference_image_uris=event.reference_image_uris,
                     )
                 )
 
+        warnings: list[str] = []
         media_plan = normalize_media_plan(
             MediaPlan(
                 image_requests=image_requests,
                 reconstruction_requests=reconstruction_requests,
             ),
             timeline,
+            warnings=warnings,
         )
+        self._media_warnings.extend(warnings)
         return media_plan.image_requests, media_plan.reconstruction_requests
 
 

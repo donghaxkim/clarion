@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.report_schema import VisualSceneSpec
+
 
 class AspectRatio(str, Enum):
     landscape = "16:9"
@@ -27,8 +29,12 @@ class ReconstructionJobRequest(BaseModel):
     case_id: str = Field(min_length=1)
     section_id: Optional[str] = None
     scene_description: str = Field(min_length=1)
+    prompt: Optional[str] = None
+    prompt_source: Optional[str] = None
+    camera_mode: Optional[str] = None
     evidence_refs: list[str] = Field(min_length=1)
     reference_image_uris: list[str] = Field(default_factory=list, max_length=3)
+    visual_scene_spec: Optional[VisualSceneSpec] = None
     duration_sec: int = Field(default=8)
     aspect_ratio: AspectRatio = AspectRatio.landscape
     negative_prompt: Optional[str] = None

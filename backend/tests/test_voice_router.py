@@ -126,6 +126,7 @@ def test_voice_websocket_uses_report_context_and_emits_tool_event(monkeypatch):
                 "target": "section",
                 "id": "section-1",
             }
+            websocket.close()
 
     assert _FakeSession.instances
     assert len(_FakeSession.instances[0].tool_responses) == 1
@@ -157,6 +158,7 @@ def test_voice_websocket_accepts_context_updates_and_text_turns(monkeypatch):
             )
             thinking = websocket.receive_json()
             assert thinking == {"type": "state", "value": "thinking"}
+            websocket.close()
 
     assert context_service.requests[-1] == ("report-1", "section-1")
     assert _FakeSession.instances[0].text_turns == [

@@ -3,6 +3,7 @@ Manages a single Gemini Live API WebSocket session.
 Handles connection, audio streaming, tool call responses, and reconnection.
 """
 
+import contextlib
 import time
 import logging
 
@@ -34,12 +35,15 @@ class GeminiVoiceSession:
     def __init__(self, system_prompt: str):
         self._system_prompt = system_prompt
         self._client = get_client()
+        self._session_manager: contextlib.AbstractAsyncContextManager | None = None
         self._session = None
         self._connected = False
         self._connect_time: float = 0
 
     async def connect(self):
         """Open the Gemini Live API session."""
+        if self._session is not None:
+            return
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=types.Content(
@@ -47,10 +51,11 @@ class GeminiVoiceSession:
             ),
             tools=[get_tool_declarations()],
         )
-        self._session = await self._client.aio.live.connect(
+        self._session_manager = self._client.aio.live.connect(
             model=LIVE_MODEL,
             config=config,
         )
+        self._session = await self._session_manager.__aenter__()
         self._connected = True
         self._connect_time = time.monotonic()
         logger.info("Gemini Live session connected")
@@ -111,7 +116,14 @@ class GeminiVoiceSession:
     async def close(self):
         """Close the Gemini session."""
         self._connected = False
-        if self._session:
+        if self._session_manager is not None:
+            try:
+                await self._session_manager.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._session_manager = None
+            self._session = None
+        elif self._session:
             try:
                 await self._session.close()
             except Exception:

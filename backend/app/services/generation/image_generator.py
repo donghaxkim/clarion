@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from app.config import GEMINI_API_KEY, REPORT_IMAGE_MODEL, VEO_ALLOW_FAKE, VERTEX_LOCATION, VERTEX_PROJECT_ID
-from app.models import MediaAsset, MediaAssetKind, ReportBlockState
+from app.models import MediaAsset, MediaAssetKind, ReportBlockState, VisualSceneSpec
 from app.utils.storage import upload_bytes
 
 
@@ -35,6 +35,9 @@ class GeminiImageGenerator:
         report_id: str,
         block_id: str,
         prompt: str,
+        prompt_source: str | None = None,
+        camera_mode: str | None = None,
+        visual_scene_spec: VisualSceneSpec | None = None,
     ) -> MediaAsset:
         image_bytes, model_used = await asyncio.to_thread(
             self._generate_sync,
@@ -54,6 +57,13 @@ class GeminiImageGenerator:
                     "block_id": block_id,
                     "model_used": model_used,
                     "prompt": prompt,
+                    "prompt_source": prompt_source,
+                    "camera_mode": camera_mode,
+                    "visual_scene_spec": (
+                        visual_scene_spec.model_dump(mode="json", exclude_none=True)
+                        if visual_scene_spec is not None
+                        else None
+                    ),
                     "image_gcs_uri": image_gcs_uri,
                 },
                 indent=2,

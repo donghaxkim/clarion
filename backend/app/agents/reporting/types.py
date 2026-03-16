@@ -4,7 +4,12 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models import Citation, ReportBlockType, ReportProvenance
+from app.models import (
+    Citation,
+    ReportBlockType,
+    ReportProvenance,
+    VisualSceneSpec,
+)
 
 
 class ReportGenerationPolicy(BaseModel):
@@ -30,6 +35,7 @@ class TimelineEvent(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     scene_description: Optional[str] = None
     image_prompt: Optional[str] = None
+    visual_scene_spec: Optional[VisualSceneSpec] = None
     reference_image_uris: list[str] = Field(default_factory=list)
     public_context_queries: list[str] = Field(default_factory=list)
     confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -71,6 +77,10 @@ class MediaRequest(BaseModel):
     confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
     prompt: Optional[str] = None
     scene_description: Optional[str] = None
+    negative_prompt: Optional[str] = None
+    prompt_source: Optional[str] = None
+    camera_mode: Optional[str] = None
+    visual_scene_spec: Optional[VisualSceneSpec] = None
     evidence_refs: list[str] = Field(default_factory=list)
     reference_image_uris: list[str] = Field(default_factory=list)
 

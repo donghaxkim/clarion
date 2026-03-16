@@ -13,8 +13,7 @@ def build_prompt(payload: ReconstructionJobRequest) -> str:
         reference_guidance = (
             "Use reference images for scene consistency, but do not invent unsupported objects or actors."
         )
-
-    return (
+    scene_prompt = payload.prompt or (
         "Create a factual incident reconstruction video suitable for legal report support. "
         "Keep the scene physically plausible and avoid cinematic exaggeration. "
         f"{_NO_TEXT_GUIDANCE} "
@@ -23,7 +22,9 @@ def build_prompt(payload: ReconstructionJobRequest) -> str:
         f"Aspect ratio: {payload.aspect_ratio.value}. "
         f"Duration: {payload.duration_sec} seconds. "
         f"{reference_guidance}"
-    ).strip()
+    )
+
+    return scene_prompt.strip()
 
 
 def build_refined_prompt(payload: ReconstructionJobRequest) -> str:

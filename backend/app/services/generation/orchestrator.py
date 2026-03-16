@@ -308,14 +308,22 @@ class ReportGenerationOrchestrator:
                 report_id=report_id,
                 block_id=request.block_id,
                 prompt=request.prompt or request.title,
+                prompt_source=request.prompt_source,
+                camera_mode=request.camera_mode,
+                visual_scene_spec=request.visual_scene_spec,
             )
 
         return await self.reconstruction_service.generate(
             case_id=payload.bundle.case_id,
             section_id=request.block_id,
             scene_description=request.scene_description or request.title,
+            prompt=request.prompt,
+            prompt_source=request.prompt_source,
+            camera_mode=request.camera_mode,
+            negative_prompt=request.negative_prompt,
             evidence_refs=request.evidence_refs or [citation.source_id for citation in request.citations],
             reference_image_uris=request.reference_image_uris,
+            visual_scene_spec=request.visual_scene_spec,
         )
 
     def _persist_report_artifacts(self, *, case_id: str, report) -> ReportArtifactRefs:

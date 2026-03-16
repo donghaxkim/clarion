@@ -38,6 +38,7 @@ from app.models import (
 )
 from app.services.generation.job_store import ReportJobStore
 from app.services.generation.orchestrator import ReportGenerationOrchestrator
+from app.services.generation.report import create_preview_report
 
 
 class _RecordingReportJobStore(ReportJobStore):
@@ -223,6 +224,78 @@ class _MisTypedMediaPipeline:
         }
 
 
+class _ComposerLeaksMediaPipeline:
+    async def run(self, *, bundle, report_id, user_id, progress_callback=None):
+        del bundle, report_id, user_id, progress_callback
+        citation = Citation(
+            source_id="ev-1",
+            segment_id="ev-1:fact:1",
+            source_label="Witness Transcript",
+            excerpt="The witness saw the vehicles collide in the intersection.",
+            provenance=ReportProvenance.evidence,
+        )
+        return PipelineResult(
+            blocks=[
+                ComposedBlockDraft(
+                    id="event-impact",
+                    type=ReportBlockType.text,
+                    title="Impact",
+                    content="The collision occurs.",
+                    sort_key="0001",
+                    provenance=ReportProvenance.evidence,
+                    confidence_score=0.8,
+                    citations=[citation],
+                ),
+                ComposedBlockDraft(
+                    id="event-impact-image",
+                    type=ReportBlockType.image,
+                    title="Impact Still",
+                    content=None,
+                    sort_key="0001.10",
+                    provenance=ReportProvenance.evidence,
+                    confidence_score=0.8,
+                    citations=[citation],
+                ),
+                ComposedBlockDraft(
+                    id="event-impact-video",
+                    type=ReportBlockType.video,
+                    title="Impact Reconstruction",
+                    content=None,
+                    sort_key="0001.20",
+                    provenance=ReportProvenance.evidence,
+                    confidence_score=0.8,
+                    citations=[citation],
+                ),
+            ],
+            image_requests=[
+                MediaRequest(
+                    block_id="event-impact-image",
+                    block_type=ReportBlockType.image,
+                    anchor_block_id="event-impact",
+                    title="Impact Still",
+                    sort_key="0001.10",
+                    citations=[citation],
+                    confidence_score=0.8,
+                    prompt="Impact still frame",
+                    evidence_refs=["ev-1"],
+                )
+            ],
+            reconstruction_requests=[
+                MediaRequest(
+                    block_id="event-impact-video",
+                    block_type=ReportBlockType.video,
+                    anchor_block_id="event-impact",
+                    title="Impact Reconstruction",
+                    sort_key="0001.20",
+                    citations=[citation],
+                    confidence_score=0.8,
+                    scene_description="Two vehicles collide in the intersection.",
+                    evidence_refs=["ev-1"],
+                )
+            ],
+        )
+
+
 class _FailingPipeline:
     async def run(self, *, bundle, report_id, user_id, progress_callback=None):
         del bundle, report_id, user_id
@@ -334,8 +407,18 @@ class _RecoveringContextWarningAdkPipeline(AdkReportingPipeline):
 
 
 class _FakeImageGenerator:
-    async def generate(self, *, case_id, report_id, block_id, prompt):
-        del case_id, report_id, block_id, prompt
+    async def generate(
+        self,
+        *,
+        case_id,
+        report_id,
+        block_id,
+        prompt,
+        prompt_source=None,
+        camera_mode=None,
+        visual_scene_spec=None,
+    ):
+        del case_id, report_id, block_id, prompt, prompt_source, camera_mode, visual_scene_spec
         return MediaAsset(
             kind=MediaAssetKind.image,
             uri="gs://test-bucket/report/impact.png",
@@ -346,14 +429,48 @@ class _FakeImageGenerator:
 
 
 class _FailingImageGenerator:
-    async def generate(self, *, case_id, report_id, block_id, prompt):
-        del case_id, report_id, block_id, prompt
+    async def generate(
+        self,
+        *,
+        case_id,
+        report_id,
+        block_id,
+        prompt,
+        prompt_source=None,
+        camera_mode=None,
+        visual_scene_spec=None,
+    ):
+        del case_id, report_id, block_id, prompt, prompt_source, camera_mode, visual_scene_spec
         raise RuntimeError("image model unavailable")
 
 
 class _FakeReconstructionService:
-    async def generate(self, *, case_id, section_id, scene_description, evidence_refs, reference_image_uris):
-        del case_id, section_id, scene_description, evidence_refs, reference_image_uris
+    async def generate(
+        self,
+        *,
+        case_id,
+        section_id,
+        scene_description,
+        prompt,
+        prompt_source,
+        camera_mode,
+        negative_prompt,
+        evidence_refs,
+        reference_image_uris,
+        visual_scene_spec,
+    ):
+        del (
+            case_id,
+            section_id,
+            scene_description,
+            prompt,
+            prompt_source,
+            camera_mode,
+            negative_prompt,
+            evidence_refs,
+            reference_image_uris,
+            visual_scene_spec,
+        )
         return MediaAsset(
             kind=MediaAssetKind.video,
             uri="gs://test-bucket/report/impact.mp4",
@@ -521,6 +638,126 @@ def test_orchestrator_normalizes_media_block_types_before_persisting_report(tmp_
     assert image_block.media[0].kind == MediaAssetKind.image
     assert video_block.type == ReportBlockType.video
     assert video_block.media[0].kind == MediaAssetKind.video
+
+
+def test_create_preview_report_dedupes_rogue_composer_media_blocks():
+    citation = Citation(
+        source_id="ev-1",
+        segment_id="ev-1:fact:1",
+        source_label="Witness Transcript",
+        excerpt="The witness saw the vehicles collide in the intersection.",
+        provenance=ReportProvenance.evidence,
+    )
+    timeline = TimelinePlan(
+        timeline_events=[
+            TimelineEvent(
+                event_id="impact",
+                title="Impact",
+                narrative="Vehicles collide in the intersection.",
+                sort_key="0001",
+                evidence_refs=["ev-1"],
+                citations=[citation],
+                confidence_score=0.8,
+            )
+        ]
+    )
+    media_plan = MediaPlan(
+        image_requests=[
+            MediaRequest(
+                block_id="event-impact-image",
+                block_type=ReportBlockType.image,
+                anchor_block_id="event-impact",
+                title="Impact Still",
+                sort_key="0001.10",
+                citations=[citation],
+                confidence_score=0.8,
+                prompt="Impact still frame",
+                evidence_refs=["ev-1"],
+            )
+        ],
+        reconstruction_requests=[
+            MediaRequest(
+                block_id="event-impact-video",
+                block_type=ReportBlockType.video,
+                anchor_block_id="event-impact",
+                title="Impact Reconstruction",
+                sort_key="0001.20",
+                citations=[citation],
+                confidence_score=0.8,
+                scene_description="Two vehicles collide in the intersection.",
+                evidence_refs=["ev-1"],
+            )
+        ],
+    )
+    composer_output = ComposerOutput(
+        blocks=[
+            ComposedBlockDraft(
+                id="event-impact",
+                type=ReportBlockType.text,
+                title="Impact",
+                content="The collision occurs.",
+                sort_key="0001",
+                provenance=ReportProvenance.evidence,
+                confidence_score=0.8,
+                citations=[citation],
+            ),
+            ComposedBlockDraft(
+                id="event-impact-image",
+                type=ReportBlockType.image,
+                title="Impact Still",
+                content=None,
+                sort_key="0001.10",
+                provenance=ReportProvenance.evidence,
+                confidence_score=0.8,
+                citations=[citation],
+            ),
+        ]
+    )
+
+    preview = create_preview_report(
+        "report-preview",
+        snapshot=PipelinePreviewSnapshot(
+            timeline_plan=timeline,
+            context_plan=ContextPlan(),
+            media_plan=media_plan,
+            composer_output=composer_output,
+        ),
+    )
+
+    assert [block.id for block in preview.sections] == [
+        "event-impact",
+        "event-impact-image",
+        "event-impact-video",
+    ]
+
+
+def test_orchestrator_dedupes_rogue_composer_media_blocks_in_final_report(tmp_path):
+    store = ReportJobStore(str(tmp_path / "jobs.json"))
+    report = ReportDocument(report_id="report-dedupe", status=ReportStatus.running)
+    job = store.create_job(report=report)
+
+    orchestrator = ReportGenerationOrchestrator(
+        job_store=store,
+        pipeline_factory=lambda **_: _ComposerLeaksMediaPipeline(),
+        image_generator=_FakeImageGenerator(),
+        reconstruction_service=_FakeReconstructionService(),
+        upload_bytes_fn=lambda data, gcs_key, content_type="application/octet-stream": f"gs://test/{gcs_key}",
+    )
+
+    asyncio.run(orchestrator.run_job(job.job_id, _request()))
+
+    final = store.get_job(job.job_id)
+    assert final is not None
+    assert final.report is not None
+    assert [block.id for block in final.report.sections] == [
+        "event-impact",
+        "event-impact-image",
+        "event-impact-video",
+    ]
+    image_block = next(block for block in final.report.sections if block.id == "event-impact-image")
+    video_block = next(block for block in final.report.sections if block.id == "event-impact-video")
+    assert image_block.content == "Impact still frame"
+    assert video_block.content == "Two vehicles collide in the intersection."
 
 
 def test_orchestrator_progress_never_regresses(tmp_path):
