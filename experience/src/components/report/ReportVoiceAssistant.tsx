@@ -636,7 +636,7 @@ export function ReportVoiceAssistant({
             {enabled
               ? rawState === 'listening'
                 ? 'Listening. Tap again to send.'
-                : 'Tap the orb to ask a question or direct an edit.'
+                : 'Tap the orb to ask a question.'
               : 'Voice becomes available once the report is complete.'}
           </span>
         </div>
