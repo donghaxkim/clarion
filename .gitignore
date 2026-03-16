@@ -6,6 +6,7 @@ venv/
 .env
 *.egg-info/
 cloudrun.env.yaml
+cloudrun.worker.env.yaml
 
 # Node
 node_modules/
@@ -21,4 +22,3 @@ frontend/.next/
 .tmp_report_jobs.json
 .artifacts/
 plans/
-mock-evidence/
