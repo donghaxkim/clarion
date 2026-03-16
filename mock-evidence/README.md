@@ -10,3 +10,9 @@ Add these files for the demo case:
 - `dashcam.mp4`
 
 Both backend and frontend build toward rendering this one case.
+
+To regenerate the witness PDFs, run:
+
+```bash
+backend/.venv/Scripts/python.exe backend/scripts/generate_mock_witness_reports.py
+```

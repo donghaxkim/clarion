@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { type LocalAudioTrack, type RemoteAudioTrack } from 'livekit-client';
 import {
-  type AnimationPlaybackControlsWithThen,
+  type AnimationPlaybackControls,
   type ValueAnimationTransition,
   animate,
   useMotionValue,
@@ -30,7 +30,7 @@ const DEFAULT_PULSE_TRANSITION: ValueAnimationTransition = {
 function useAnimatedValue<T>(initialValue: T) {
   const [value, setValue] = useState(initialValue);
   const motionValue = useMotionValue(initialValue);
-  const controlsRef = useRef<AnimationPlaybackControlsWithThen | null>(null);
+  const controlsRef = useRef<AnimationPlaybackControls | null>(null);
   useMotionValueEvent(motionValue, 'change', (value) => setValue(value as T));
 
   const animateFn = useCallback(

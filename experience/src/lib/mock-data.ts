@@ -222,9 +222,9 @@ export const MOCK_REPORT_SECTIONS: ReportSection[] = [
     order: 3,
     text: 'On March 12, 2024, at approximately 14:22 hours, a rear-end collision occurred at the intersection of Main Street and 5th Avenue. Sarah Chen[1], operating a 2019 Honda Civic, was stationary at a red light when her vehicle was struck from behind by a 2021 Ford F-150 operated by Marcus Thompson[2]. Officer James Miller[3] responded to the scene and completed the initial incident report.',
     citations: [
-      { id: 'cit-001', source: 'PD_Report_2024_0312.pdf', page: 1, excerpt: 'Responding unit arrived at 14:22. Plaintiff vehicle stationary at intersection.' },
-      { id: 'cit-002', source: 'Chen_Audio_Statement.m4a', time: '0:32', excerpt: 'I was sitting at the red light when he hit me.' },
-      { id: 'cit-003', source: 'PD_Report_2024_0312.pdf', page: 1, excerpt: 'Officer Miller, Badge #4471, primary responding officer.' },
+      { id: 'cit-001', source_id: 'ev-001', source_label: 'PD_Report_2024_0312.pdf', excerpt: 'Responding unit arrived at 14:22. Plaintiff vehicle stationary at intersection.' },
+      { id: 'cit-002', source_id: 'ev-002', source_label: 'Chen_Audio_Statement.m4a', excerpt: 'I was sitting at the red light when he hit me.' },
+      { id: 'cit-003', source_id: 'ev-003', source_label: 'PD_Report_2024_0312.pdf', excerpt: 'Officer Miller, Badge #4471, primary responding officer.' },
     ],
     entity_ids: ['ent-001', 'ent-002', 'ent-003'],
   },
@@ -261,8 +261,8 @@ export const MOCK_REPORT_SECTIONS: ReportSection[] = [
     order: 7,
     text: 'Sarah Chen (Plaintiff) is a 34-year-old marketing consultant residing at 847 Elm Court. She was traveling alone at the time of the incident and sustained cervical and lumbar injuries requiring emergency care[4]. Marcus Thompson (Defendant) is a 41-year-old contractor. Per the dashcam footage retrieved from his vehicle, Thompson was in possession of a mobile device in the minutes preceding impact[5]. Officer James Miller has 12 years with the department and completed the standard accident report, though his report contains material omissions regarding dashcam footage and direction of travel.',
     citations: [
-      { id: 'cit-004', source: 'Chen_Medical_Records.pdf', page: 2, excerpt: 'Patient presents with cervical tenderness and reported lumbar pain following MVC.' },
-      { id: 'cit-005', source: 'dashcam_thompson.mp4', time: '2:14', excerpt: 'Device visible in driver seat area prior to impact zone.' },
+      { id: 'cit-004', source_id: 'ev-004', source_label: 'Chen_Medical_Records.pdf', excerpt: 'Patient presents with cervical tenderness and reported lumbar pain following MVC.' },
+      { id: 'cit-005', source_id: 'ev-005', source_label: 'dashcam_thompson.mp4', excerpt: 'Device visible in driver seat area prior to impact zone.' },
     ],
     entity_ids: ['ent-001', 'ent-002', 'ent-003'],
   },
@@ -279,8 +279,8 @@ export const MOCK_REPORT_SECTIONS: ReportSection[] = [
     order: 9,
     text: 'Physical evidence is consistent with a moderate-to-high speed rear-end impact. Photographic documentation shows significant crush deformation to the Chen vehicle\'s trunk and rear quarter panels[6], with corresponding front-end damage and airbag deployment in the Thompson vehicle[7]. The airbag deployment threshold for the 2021 Ford F-150 is calibrated at approximately 12–14 mph; deployment is therefore confirmatory of substantial impact force. Taken together, the physical evidence supports a speed greater than the 35 mph estimate in the police report.',
     citations: [
-      { id: 'cit-006', source: 'damage_front_chen.jpg', excerpt: 'Trunk collapse visible; bumper fully displaced.' },
-      { id: 'cit-007', source: 'damage_front_thompson.jpg', excerpt: 'Airbag deployed; hood crumple indicates significant deceleration force.' },
+      { id: 'cit-006', source_id: 'ev-006', source_label: 'damage_front_chen.jpg', excerpt: 'Trunk collapse visible; bumper fully displaced.' },
+      { id: 'cit-007', source_id: 'ev-007', source_label: 'damage_front_thompson.jpg', excerpt: 'Airbag deployed; hood crumple indicates significant deceleration force.' },
     ],
     entity_ids: ['ent-005', 'ent-006'],
   },
@@ -312,16 +312,18 @@ export const MOCK_REPORT_SECTIONS: ReportSection[] = [
 export const MOCK_ENTITY_DETAILS: Record<string, EntityDetailResponse> = {
   'ent-001': {
     entity: MOCK_ENTITIES[0],
+    mentions: [],
     facts: [
-      { fact: 'Was stationary at red light when collision occurred', dimension: 'Liability Attribution', evidence_id: 'ev-001', excerpt: 'Plaintiff vehicle stationary at intersection signal', reliability: 0.92 },
-      { fact: 'Sustained cervical tenderness at C5-C6 level', dimension: 'Injury Causation', evidence_id: 'ev-002', excerpt: 'Physical exam: cervical tenderness C5-C6', reliability: 0.88 },
-      { fact: 'Estimated Thompson\'s speed at 45-50 mph', dimension: 'Speed & Velocity', evidence_id: 'ev-003', excerpt: 'He was going way too fast, at least 45 mph', reliability: 0.55 },
-      { fact: 'Was driving alone at time of incident', dimension: 'Traffic Conditions', evidence_id: 'ev-001', excerpt: 'No passengers in plaintiff vehicle', reliability: 0.95 },
+      { fact: 'Was stationary at red light when collision occurred', dimension: 'Liability Attribution', source: 'Police report', evidence_id: 'ev-001', excerpt: 'Plaintiff vehicle stationary at intersection signal', reliability: 0.92 },
+      { fact: 'Sustained cervical tenderness at C5-C6 level', dimension: 'Injury Causation', source: 'Medical record', evidence_id: 'ev-002', excerpt: 'Physical exam: cervical tenderness C5-C6', reliability: 0.88 },
+      { fact: 'Estimated Thompson\'s speed at 45-50 mph', dimension: 'Speed & Velocity', source: 'Witness statement', evidence_id: 'ev-003', excerpt: 'He was going way too fast, at least 45 mph', reliability: 0.55 },
+      { fact: 'Was driving alone at time of incident', dimension: 'Traffic Conditions', source: 'Police report', evidence_id: 'ev-001', excerpt: 'No passengers in plaintiff vehicle', reliability: 0.95 },
     ],
     contradictions: [MOCK_ANALYSIS.contradictions.items[0], MOCK_ANALYSIS.contradictions.items[1]],
   },
   'ent-002': {
     entity: MOCK_ENTITIES[1],
+    mentions: [],
     facts: [
       { fact: 'Operating vehicle at time of collision', dimension: 'Liability Attribution', evidence_id: 'ev-001', excerpt: 'Thompson, Marcus — driver of striking vehicle', reliability: 0.98 },
       { fact: 'Speed estimated at 35 mph by police report', dimension: 'Speed & Velocity', evidence_id: 'ev-001', excerpt: 'Vehicle estimated at 35 mph based on physical evidence', reliability: 0.70 },

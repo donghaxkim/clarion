@@ -31,8 +31,8 @@ def get_client() -> genai.Client:
 
 # Default model — use Gemini 2.5 Flash for speed during parsing,
 # switch to Pro for report generation if needed.
-FAST_MODEL = "gemini-2.5-flash-preview-05-20"
-FULL_MODEL = "gemini-2.5-pro-preview-05-06"
+FAST_MODEL = "gemini-3-flash-preview"
+FULL_MODEL = "gemini-3-pro-preview"
 
 
 # ──────────────────────────────────────────────

@@ -1,72 +1,79 @@
 """
 Builds the system instruction for the Gemini Live API voice session.
-Takes a CaseFile and produces a text prompt that tells Gemini everything
-it needs to know about the case.
+Takes a report-centric voice context and produces a text prompt that tells
+Gemini everything it needs to know about the current report state.
 """
 
-from app.models.schema import CaseFile
+from app.services.voice.models import VoiceSessionContext
 
 
-def build_system_prompt(case: CaseFile) -> str:
-    """Build Gemini system instruction from case data."""
+def build_system_prompt(context: VoiceSessionContext) -> str:
+    """Build Gemini system instruction from voice context."""
     sections = [
-        _header(case),
-        _contradictions(case),
-        _entities(case),
-        _evidence(case),
-        _report_sections(case),
+        _header(context),
+        _contradictions(context),
+        _entities(context),
+        _evidence(context),
+        _report_sections(context),
         _instructions(),
     ]
     return "\n\n".join(sections)
 
 
-def _header(case: CaseFile) -> str:
+def _header(context: VoiceSessionContext) -> str:
     return (
         "You are Clarion, a litigation intelligence assistant. "
         "You speak concisely and professionally, like a sharp paralegal briefing an attorney.\n\n"
-        f"CASE: {case.title or 'Untitled Case'}\n"
-        f"TYPE: {case.case_type or 'Unknown'}\n"
-        f"STATUS: {case.status}"
+        f"CASE: {context.title or 'Untitled Case'}\n"
+        f"TYPE: {context.case_type or 'Unknown'}\n"
+        f"STATUS: {context.status}"
     )
 
 
-def _contradictions(case: CaseFile) -> str:
+def _contradictions(context: VoiceSessionContext) -> str:
     lines = ["CONTRADICTIONS:"]
-    if not case.contradictions:
+    if not context.contradictions:
         lines.append("  None detected yet.")
-    for c in case.contradictions:
-        sev = c.severity.upper() if isinstance(c.severity, str) else c.severity
-        lines.append(f"- [{sev}] {c.id}: {c.fact_a} vs {c.fact_b}")
-        lines.append(f"  Description: {c.description}")
+    for contradiction in context.contradictions:
+        lines.append(
+            f"- [{contradiction.severity.upper()}] "
+            f"{contradiction.contradiction_id}: {contradiction.fact_a} vs {contradiction.fact_b}"
+        )
+        lines.append(f"  Description: {contradiction.description}")
     return "\n".join(lines)
 
 
-def _entities(case: CaseFile) -> str:
+def _entities(context: VoiceSessionContext) -> str:
     lines = ["KEY ENTITIES:"]
-    if not case.entities:
+    if not context.entities:
         lines.append("  None identified yet.")
-    for e in case.entities:
-        lines.append(f"- {e.name} ({e.type}): {len(e.mentions)} mentions")
+    for entity in context.entities:
+        lines.append(
+            f"- {entity.name} ({entity.entity_type}): {len(entity.mentions)} mentions"
+        )
     return "\n".join(lines)
 
 
-def _evidence(case: CaseFile) -> str:
+def _evidence(context: VoiceSessionContext) -> str:
     lines = ["EVIDENCE FILES:"]
-    if not case.evidence:
+    if not context.evidence:
         lines.append("  No evidence uploaded yet.")
-    for e in case.evidence:
-        summary = e.summary or "No summary"
-        lines.append(f"- {e.id}: {e.filename} ({e.evidence_type}) — {summary}")
+    for evidence in context.evidence:
+        summary = evidence.summary or "No summary"
+        lines.append(
+            f"- {evidence.evidence_id}: {evidence.filename} "
+            f"({evidence.evidence_type}) - {summary}"
+        )
     return "\n".join(lines)
 
 
-def _report_sections(case: CaseFile) -> str:
+def _report_sections(context: VoiceSessionContext) -> str:
     lines = ["REPORT SECTIONS:"]
-    if not case.report_sections:
+    if not context.sections:
         lines.append("  No report generated yet.")
-    for s in case.report_sections:
-        label = s.text[:60] if s.text else "(no text)"
-        lines.append(f"- {s.id}: [{s.block_type}] {label}")
+    for section in context.sections:
+        label = (section.text or section.title or "(no text)")[:60]
+        lines.append(f"- {section.section_id}: [{section.kind}] {label}")
     return "\n".join(lines)
 
 

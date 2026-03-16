@@ -1,14 +1,25 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
 
+import type { WorkspaceSummary } from '@/components/canvas/EvidenceCanvas';
+
 const EvidenceCanvas = dynamic(
-  () => import('@/components/canvas/EvidenceCanvas').then((m) => m.EvidenceCanvas),
-  { ssr: false }
+  () => import('@/components/canvas/EvidenceCanvas').then((module) => module.EvidenceCanvas),
+  { ssr: false },
 );
 
+const DEFAULT_SUMMARY: WorkspaceSummary = {
+  caseId: null,
+  title: 'Untitled Matter',
+  statusText: 'No files indexed',
+  evidenceCount: 0,
+};
+
 export default function WorkspacePage() {
+  const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary>(DEFAULT_SUMMARY);
+
   return (
     <div
       style={{
@@ -20,7 +31,6 @@ export default function WorkspacePage() {
         background: 'var(--bg)',
       }}
     >
-      {/* CLARION wordmark bar */}
       <header
         style={{
           height: '48px',
@@ -46,7 +56,6 @@ export default function WorkspacePage() {
           Clarion
         </span>
 
-        {/* Case title in header */}
         <div
           style={{
             marginLeft: '16px',
@@ -57,10 +66,9 @@ export default function WorkspacePage() {
             fontFamily: 'DM Sans, sans-serif',
           }}
         >
-          Chen v. Thompson — Rear-End Collision
+          {workspaceSummary.title}
         </div>
 
-        {/* Status indicator */}
         <div
           style={{
             marginLeft: 'auto',
@@ -77,17 +85,16 @@ export default function WorkspacePage() {
               width: '6px',
               height: '6px',
               borderRadius: '50%',
-              background: '#6B9B7E',
+              background: workspaceSummary.evidenceCount > 0 ? '#6B9B7E' : 'var(--border)',
               display: 'inline-block',
             }}
           />
-          6 files indexed
+          {workspaceSummary.statusText}
         </div>
       </header>
 
-      {/* Canvas fills remaining height */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <EvidenceCanvas />
+        <EvidenceCanvas onWorkspaceChange={setWorkspaceSummary} />
       </div>
     </div>
   );

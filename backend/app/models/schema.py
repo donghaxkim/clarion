@@ -215,27 +215,12 @@ class MissingInfo(BaseModel):
 # ═══════════════════════════════════════════════
 
 BLOCK_TYPES = Literal[
-    "heading",
     "text",
-    "image",                                  # AI-generated illustration/reconstruction
-    "evidence_image",                         # original uploaded photo with annotations
+    "image",                                  # AI-generated illustration
     "video",                                  # AI-generated reconstruction clip
-    "timeline",
-    "diagram",
-    "counter_argument",
 ]
 
 SectionType = BLOCK_TYPES  # alias for code that imports SectionType
-
-
-class TimelineEvent(BaseModel):
-    """A single event on the zoomable timeline."""
-    time_display: str                         # "2:34 PM" or "March 12, 2024"
-    sort_key: float                           # unix timestamp for ordering
-    title: str
-    description: Optional[str] = None
-    evidence_ids: list[str] = []              # which evidence items support this
-
 
 class ReportSection(BaseModel):
     """
@@ -251,11 +236,8 @@ class ReportSection(BaseModel):
     order: int                                # position in report, 0-indexed
 
     # Content — populate based on block_type
-    text: Optional[str] = None                # for heading, text, counter_argument
-    heading_level: Optional[int] = None       # 1, 2, or 3 (only for heading blocks)
-    media: Optional[MediaRef] = None          # for image, video, diagram, evidence_image
-    timeline_events: Optional[list[TimelineEvent]] = None
-    annotations: Optional[list[dict]] = None  # for evidence_image: [{"x": 0.5, "y": 0.3, "label": "Point of impact"}]
+    text: Optional[str] = None                # for text blocks
+    media: Optional[MediaRef] = None          # for image and video blocks
 
     # Intelligence
     citations: list[Citation] = []
@@ -292,7 +274,7 @@ class CaseFile(BaseModel):
     report_sections: list[ReportSection] = []
 
     # Status
-    status: Literal["intake", "parsing", "analyzing", "generating", "complete"] = "intake"
+    status: Literal["intake", "parsing", "analyzing", "analyzed", "generating", "complete"] = "intake"
 
 
 # ═══════════════════════════════════════════════

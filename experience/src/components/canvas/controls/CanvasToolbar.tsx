@@ -5,6 +5,7 @@ import { Paperclip, Zap } from 'lucide-react';
 
 interface CanvasToolbarProps {
   evidenceCount: number;
+  indexedEvidenceCount: number;
   isAnalyzing: boolean;
   isGenerating: boolean;
   caseId: string | null;
@@ -14,6 +15,7 @@ interface CanvasToolbarProps {
 
 export function CanvasToolbar({
   evidenceCount,
+  indexedEvidenceCount,
   isAnalyzing,
   isGenerating,
   caseId,
@@ -23,7 +25,7 @@ export function CanvasToolbar({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const busy = isAnalyzing || isGenerating;
-  const canGenerate = evidenceCount > 0 && !busy;
+  const canGenerate = indexedEvidenceCount > 0 && !busy;
 
   return (
     <div

@@ -1,27 +1,51 @@
 """
-CLARION — Citation Tracker Service
-=====================================
-Builds a dimension-aware fact index across all evidence.
+CLARION — Citation Services
+==============================
+Two citation systems coexist during migration:
 
-Key insight: Facts aren't flat strings. They belong to DIMENSIONS
-of the case. But dimensions aren't hardcoded — they're DISCOVERED
-from the actual evidence. A car accident case has dimensions like
-speed, direction, signal state. A medical malpractice case has
-standard of care, diagnosis timeline, informed consent. A contract
-dispute has terms, breach, damages, notice requirements.
+1. ``link_citation`` — lightweight helper used by the reporting pipeline.
+   Produces new-style Citation objects (report_schema).
 
-Gemini reads the evidence and tells us what the dimensions are.
-
-Used by:
-  - Report generator (Larris): attach citations to every claim
-  - Contradiction detector: find conflicting facts within same dimension
-  - Frontend (Person B): show source tooltips on hover
+2. ``CitationIndex`` / ``build_citation_index`` — full dimension-aware fact
+   index used by the legacy intelligence layer (contradictions, entity
+   analysis).  Uses old-schema models (schema.py).
 """
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
+
+# ── New-style citation helper (reporting pipeline) ───────────────
+from app.services.generation.report_citations import build_evidence_citation
+
+
+def link_citation(
+    claim: str,
+    doc_id: str,
+    page: int | None,
+    *,
+    bundle=None,
+) -> dict:
+    citation = build_evidence_citation(
+        doc_id,
+        bundle=bundle,
+        excerpt=claim,
+        page_number=page,
+    )
+    if citation is None:
+        raise ValueError(f"Unable to build evidence citation for {doc_id}")
+    return citation.model_dump(mode="json")
+
+
+# ── Full citation index (legacy intelligence layer) ─────────────
 from app.models.schema import (
-    CaseFile, EvidenceItem, EvidenceType, Citation,
-    SourceLocation, new_id,
+    CaseFile,
+    Citation,
+    EvidenceItem,
+    EvidenceType,
+    SourceLocation,
+    new_id,
 )
 from app.utils.gemini_client import ask_gemini_json
 

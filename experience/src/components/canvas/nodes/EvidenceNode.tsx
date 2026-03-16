@@ -28,6 +28,7 @@ export interface EvidenceNodeData {
   labels: string[];
   nodeStatus: 'uploading' | 'parsing' | 'complete';
   uploadProgress?: number;
+  isIndexed?: boolean;
   pinned?: boolean;
   analyzing?: boolean;
   hasConnections?: boolean;
@@ -326,7 +327,9 @@ function EvidenceNodeComponent({ data, selected }: NodeProps<EvidenceNodeType>) 
         style={{
           width: '260px',
           background: 'var(--bg-surface)',
-          border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+          borderTop: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+          borderRight: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+          borderBottom: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
           borderLeft: `3px solid ${accentColor}`,
           borderRadius: '6px',
           boxShadow: selected
