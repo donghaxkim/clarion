@@ -208,6 +208,7 @@ function EvidenceCanvasInner({
   const [showAnalyzeWave, setShowAnalyzeWave] = useState(false);
   const [reportSidebarOpen, setReportSidebarOpen] = useState(false);
   const [reportSections, setReportSections] = useState<SectionState[]>([]);
+  const [reportJobId, setReportJobId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [reportDone, setReportDone] = useState(false);
 
@@ -430,6 +431,7 @@ function EvidenceCanvasInner({
 
   const refreshReportJob = useCallback(async (jobId: string) => {
     const snapshot = await getReportJob(jobId);
+    setReportJobId(snapshot.job_id);
     setReportSections(buildSectionStates(snapshot.report_sections, snapshot.status));
     setIsGenerating(snapshot.status !== 'completed' && snapshot.status !== 'failed');
     setReportDone(snapshot.status === 'completed');
@@ -680,10 +682,12 @@ function EvidenceCanvasInner({
     setReportSidebarOpen(true);
     setIsGenerating(true);
     setReportDone(false);
+    setReportJobId(null);
     setReportSections([]);
 
     try {
       const response = await generateReport(caseId);
+      setReportJobId(response.job_id);
       await refreshReportJob(response.job_id);
       streamCleanupRef.current?.();
       streamCleanupRef.current = streamReport(
@@ -795,6 +799,7 @@ function EvidenceCanvasInner({
 
       {reportSidebarOpen && (
         <ReportProgressSidebar
+          jobId={reportJobId}
           sections={reportSections}
           isGenerating={isGenerating}
           done={reportDone}
