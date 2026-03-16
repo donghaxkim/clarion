@@ -1,31 +1,108 @@
-import {
-  CreateCaseResponse,
-  UploadResponse,
-  AnalysisResponse,
-  GenerateResponse,
-  FullCase,
-  EntityDetailResponse,
-  StreamEvent,
-  ReportSection,
-} from './types';
+'use client';
 
 import {
-  MOCK_CASE_ID,
+  adaptAnalysisResponse,
+  adaptCaseReportState,
+  adaptCaseResponse,
+  adaptEntityDetailResponse,
+  adaptGenerateResponse,
+  adaptReportJobSnapshot,
+  adaptReportSections,
+  adaptUploadResponse,
+} from './adapters';
+import type {
+  GenerateReportJobAcceptedResponse,
+  ReportDocument,
+  ReportGenerationJobStatusResponse,
+} from './clarion-types';
+import {
   MOCK_ANALYSIS,
+  MOCK_CASE_ID,
+  MOCK_CASE_TITLE,
+  MOCK_ENTITY_DETAILS,
   MOCK_EVIDENCE,
   MOCK_FULL_CASE,
   MOCK_REPORT_SECTIONS,
-  MOCK_ENTITY_DETAILS,
 } from './mock-data';
+import type {
+  AnalysisResponse,
+  CaseReportState,
+  CreateCaseResponse,
+  EditSectionResponse,
+  EntityDetailResponse,
+  FullCase,
+  GenerateResponse,
+  ParsedEvidence,
+  ReportJobSnapshot,
+  ReportSection,
+  UploadResponse,
+} from './types';
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = '/api';
+const REPORT_STREAM_EVENTS = [
+  'job.started',
+  'timeline.ready',
+  'block.created',
+  'block.updated',
+  'media.started',
+  'media.completed',
+  'job.activity',
+  'report.preview.updated',
+];
+const REPORT_STREAM_TERMINAL_EVENTS = ['job.completed', 'job.failed'];
 
 function delay(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ─── Case ──────────────────────────────────────────────────────────────────────
+async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
+  }
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as T;
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  const fallback = `Request failed with status ${response.status}.`;
+  const text = await response.text();
+
+  if (!text) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as { detail?: string; error?: string };
+    return parsed.detail ?? parsed.error ?? text;
+  } catch {
+    return text;
+  }
+}
+
+function buildMockCaseReportState(caseId: string): CaseReportState {
+  return {
+    case_id: caseId,
+    job_id: 'mock-report-job',
+    report_id: 'mock-report',
+    status: 'completed',
+    progress: 100,
+    warnings: [],
+    error: null,
+    report_sections: MOCK_REPORT_SECTIONS,
+    activity: null,
+  };
+}
 
 export async function createCase(opts?: {
   title?: string;
@@ -33,178 +110,296 @@ export async function createCase(opts?: {
   description?: string;
 }): Promise<CreateCaseResponse> {
   if (USE_MOCK) {
-    await delay(400);
-    return { case_id: MOCK_CASE_ID, status: 'created', created_at: new Date().toISOString() };
+    await delay(200);
+    return {
+      case_id: MOCK_CASE_ID,
+      status: 'created',
+      created_at: new Date().toISOString(),
+    };
   }
-  const form = new FormData();
-  if (opts?.title) form.append('title', opts.title);
-  if (opts?.case_type) form.append('case_type', opts.case_type);
-  if (opts?.description) form.append('description', opts.description);
-  const res = await fetch(`${API_BASE}/api/case/create`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`Failed to create case: ${res.statusText}`);
-  return res.json();
-}
 
-// ─── Upload ────────────────────────────────────────────────────────────────────
+  return fetchJson<CreateCaseResponse>('/cases', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      title: opts?.title,
+      case_type: opts?.case_type,
+      description: opts?.description,
+    }),
+  });
+}
 
 export async function uploadFiles(
   caseId: string,
   files: File[],
-  onProgress?: (evidence: UploadResponse['parsed'][0]) => void
+  onProgress?: (evidence: ParsedEvidence) => void,
 ): Promise<UploadResponse> {
   if (USE_MOCK) {
     const results: UploadResponse['parsed'] = [];
-    for (let i = 0; i < files.length; i++) {
-      await delay(600 + Math.random() * 400);
-      const mock = MOCK_EVIDENCE[i % MOCK_EVIDENCE.length];
-      const ev = { ...mock, filename: files[i].name, evidence_id: `ev-mock-${i}` };
-      results.push(ev);
-      onProgress?.(ev);
+    for (let index = 0; index < files.length; index += 1) {
+      await delay(250);
+      const mock = MOCK_EVIDENCE[index % MOCK_EVIDENCE.length];
+      const parsed = { ...mock, filename: files[index].name, evidence_id: `ev-mock-${index}` };
+      results.push(parsed);
+      onProgress?.(parsed);
     }
-    return { case_id: caseId, parsed: results, video_pending: [], total_evidence: results.length, total_entities: 8 };
+    return {
+      case_id: caseId,
+      parsed: results,
+      video_pending: [],
+      total_evidence: results.length,
+      total_entities: results.reduce((total, item) => total + item.entity_count, 0),
+    };
   }
-  const form = new FormData();
-  files.forEach((f) => form.append('files[]', f));
-  const res = await fetch(`${API_BASE}/api/case/${caseId}/upload`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
-  return res.json();
-}
 
-// ─── Analyze ───────────────────────────────────────────────────────────────────
+  const form = new FormData();
+  for (const file of files) {
+    form.append('files', file);
+  }
+
+  const payload = adaptUploadResponse(
+    await fetchJson<unknown>(`/cases/${caseId}/upload`, {
+      method: 'POST',
+      body: form,
+    }),
+  );
+
+  for (const parsed of payload.parsed) {
+    if (parsed.status === 'parsed' && parsed.evidence_id) {
+      onProgress?.(parsed);
+    }
+  }
+
+  return payload;
+}
 
 export async function analyzeCase(caseId: string): Promise<AnalysisResponse> {
   if (USE_MOCK) {
-    await delay(1800);
+    await delay(400);
     return MOCK_ANALYSIS;
   }
-  const res = await fetch(`${API_BASE}/api/case/${caseId}/analyze`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Analysis failed: ${res.statusText}`);
-  return res.json();
-}
 
-// ─── Generate ──────────────────────────────────────────────────────────────────
+  return adaptAnalysisResponse(
+    await fetchJson<unknown>(`/cases/${caseId}/analyze`, {
+      method: 'POST',
+    }),
+  );
+}
 
 export async function generateReport(caseId: string): Promise<GenerateResponse> {
   if (USE_MOCK) {
-    await delay(300);
-    return { case_id: caseId, status: 'streaming', stream_url: `/api/stream/${caseId}` };
+    await delay(150);
+    return {
+      case_id: caseId,
+      job_id: 'mock-report-job',
+      report_id: 'mock-report',
+      status: 'queued',
+      status_url: '/api/report-jobs/mock-report-job',
+      stream_url: '/api/report-jobs/mock-report-job/stream',
+      report_url: '/api/reports/mock-report',
+    };
   }
-  const res = await fetch(`${API_BASE}/api/case/${caseId}/generate`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Generate failed: ${res.statusText}`);
-  return res.json();
+
+  return adaptGenerateResponse(
+    caseId,
+    await fetchJson<GenerateReportJobAcceptedResponse>(`/cases/${caseId}/report-jobs`, {
+      method: 'POST',
+    }),
+  );
 }
 
-// ─── Stream ────────────────────────────────────────────────────────────────────
-
 export function streamReport(
-  caseId: string,
-  onEvent: (event: StreamEvent) => void,
-  onError?: (err: Error) => void
+  jobId: string,
+  onInvalidate: () => void,
+  onError?: (error: Error) => void,
 ): () => void {
   if (USE_MOCK) {
     let cancelled = false;
 
     (async () => {
-      const sections = MOCK_REPORT_SECTIONS;
-
-      for (const section of sections) {
-        if (cancelled) break;
-
-        onEvent({ event: 'section_start', section: { ...section, text: '' } });
-        await delay(200);
-
-        if (section.text) {
-          const words = section.text.split(' ');
-          let accumulated = '';
-          for (const word of words) {
-            if (cancelled) break;
-            accumulated += (accumulated ? ' ' : '') + word;
-            onEvent({ event: 'section_delta', section_id: section.id, delta_text: word + ' ' });
-            await delay(30 + Math.random() * 40);
-          }
-        } else if (section.block_type === 'timeline' || section.block_type === 'heading') {
-          // Non-text sections arrive complete
+      for (let index = 0; index < MOCK_REPORT_SECTIONS.length; index += 1) {
+        if (cancelled) {
+          return;
         }
-
-        onEvent({ event: 'section_complete', section_id: section.id });
         await delay(150);
+        onInvalidate();
       }
-
+    })().catch((error) => {
       if (!cancelled) {
-        onEvent({ event: 'status', status: 'complete', progress: 100, message: 'Report generation complete' });
-        await delay(200);
-        onEvent({ event: 'done' });
+        onError?.(error instanceof Error ? error : new Error('Mock stream failed.'));
       }
-    })();
+    });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }
 
-  const es = new EventSource(`${API_BASE}/api/stream/${caseId}`);
-  es.onmessage = (e) => {
-    try {
-      const parsed: StreamEvent = JSON.parse(e.data);
-      onEvent(parsed);
-    } catch (err) {
-      onError?.(new Error('Failed to parse stream event'));
-    }
+  const source = new EventSource(`${API_BASE}/report-jobs/${jobId}/stream`);
+  const handleInvalidate = () => {
+    onInvalidate();
   };
-  es.onerror = () => {
-    onError?.(new Error('Stream connection failed'));
-    es.close();
+  const handleTerminal = () => {
+    onInvalidate();
+    source.close();
   };
-  return () => es.close();
-}
 
-// ─── Case State ────────────────────────────────────────────────────────────────
+  for (const eventName of REPORT_STREAM_EVENTS) {
+    source.addEventListener(eventName, handleInvalidate);
+  }
+  for (const eventName of REPORT_STREAM_TERMINAL_EVENTS) {
+    source.addEventListener(eventName, handleTerminal);
+  }
+
+  source.onmessage = handleInvalidate;
+  source.onerror = () => {
+    onError?.(new Error('Report stream connection failed.'));
+    source.close();
+  };
+
+  return () => {
+    for (const eventName of REPORT_STREAM_EVENTS) {
+      source.removeEventListener(eventName, handleInvalidate);
+    }
+    for (const eventName of REPORT_STREAM_TERMINAL_EVENTS) {
+      source.removeEventListener(eventName, handleTerminal);
+    }
+    source.close();
+  };
+}
 
 export async function getCase(caseId: string): Promise<FullCase> {
   if (USE_MOCK) {
-    await delay(300);
-    return MOCK_FULL_CASE;
+    await delay(120);
+    return {
+      ...MOCK_FULL_CASE,
+      case_id: caseId,
+      title: MOCK_CASE_TITLE,
+      latest_report_id: 'mock-report',
+      latest_report_job_id: 'mock-report-job',
+      status: 'complete',
+    };
   }
-  const res = await fetch(`${API_BASE}/api/case/${caseId}`);
-  if (!res.ok) throw new Error(`Failed to fetch case: ${res.statusText}`);
-  return res.json();
+
+  return adaptCaseResponse(await fetchJson<unknown>(`/cases/${caseId}`));
 }
 
-// ─── Entity Detail ─────────────────────────────────────────────────────────────
-
-export async function getEntityDetail(caseId: string, entityName: string): Promise<EntityDetailResponse> {
+export async function getCaseReport(caseId: string): Promise<CaseReportState> {
   if (USE_MOCK) {
-    await delay(300);
+    await delay(120);
+    return buildMockCaseReportState(caseId);
+  }
+
+  return adaptCaseReportState(
+    await fetchJson<unknown>(`/cases/${caseId}/report`),
+  );
+}
+
+export async function getReportJob(jobId: string): Promise<ReportJobSnapshot> {
+  if (USE_MOCK) {
+    await delay(120);
+    const mock = buildMockCaseReportState(MOCK_CASE_ID);
+    return {
+      job_id: jobId,
+      report_id: mock.report_id ?? 'mock-report',
+      status: mock.status,
+      progress: mock.progress,
+      warnings: mock.warnings,
+      error: mock.error,
+      report_sections: mock.report_sections,
+      activity: mock.activity,
+    };
+  }
+
+  return adaptReportJobSnapshot(
+    await fetchJson<ReportGenerationJobStatusResponse>(`/report-jobs/${jobId}`),
+  );
+}
+
+export async function getReport(reportId: string): Promise<ReportSection[]> {
+  if (USE_MOCK) {
+    await delay(120);
+    return MOCK_REPORT_SECTIONS.map((section) => ({ ...section, report_id: reportId }));
+  }
+
+  const report = await fetchJson<ReportDocument>(`/reports/${reportId}`);
+  return adaptReportSections(report);
+}
+
+export async function getEntityDetail(
+  caseId: string,
+  entityName: string,
+): Promise<EntityDetailResponse> {
+  if (USE_MOCK) {
+    await delay(120);
     const entry = Object.values(MOCK_ENTITY_DETAILS).find(
-      (d) => d.entity.name.toLowerCase() === entityName.toLowerCase()
+      (detail) => detail.entity.name.toLowerCase() === entityName.toLowerCase(),
     );
-    if (!entry) {
-      return {
+    return (
+      entry ?? {
         entity: { id: 'ent-unknown', type: 'person', name: entityName },
+        mentions: [],
         facts: [],
         contradictions: [],
-      };
-    }
-    return entry;
+      }
+    );
   }
-  const res = await fetch(`${API_BASE}/api/case/${caseId}/entities/${encodeURIComponent(entityName)}`);
-  if (!res.ok) throw new Error(`Failed to fetch entity: ${res.statusText}`);
-  return res.json();
+
+  return adaptEntityDetailResponse(
+    await fetchJson<unknown>(
+      `/cases/${caseId}/entities/${encodeURIComponent(entityName)}`,
+    ),
+  );
 }
 
-// ─── Edit Section ──────────────────────────────────────────────────────────────
-
-export async function editSection(
-  caseId: string,
-  sectionId: string,
-  instruction: string
-): Promise<{ case_id: string; section_id: string; status: string }> {
+export async function editSection(input: {
+  caseId: string;
+  sectionId: string;
+  instruction: string;
+  canonicalBlockId?: string;
+  editTarget?: 'title' | 'content';
+}): Promise<EditSectionResponse> {
   if (USE_MOCK) {
-    await delay(2000);
-    return { case_id: caseId, section_id: sectionId, status: 'updated' };
+    await delay(250);
+    return {
+      case_id: input.caseId,
+      report_id: 'mock-report',
+      section_id: input.sectionId,
+      canonical_block_id: input.canonicalBlockId ?? input.sectionId,
+      status: 'updated',
+      report_sections: MOCK_REPORT_SECTIONS,
+    };
   }
-  const form = new FormData();
-  form.append('section_id', sectionId);
-  form.append('instruction', instruction);
-  const res = await fetch(`${API_BASE}/api/case/${caseId}/edit-section`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`Edit failed: ${res.statusText}`);
-  return res.json();
+
+  const payload = await fetchJson<{
+    case_id: string;
+    report_id: string;
+    section_id: string;
+    canonical_block_id: string;
+    status: string;
+    report: ReportDocument;
+  }>('/edit/section', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      case_id: input.caseId,
+      section_id: input.sectionId,
+      instruction: input.instruction,
+      canonical_block_id: input.canonicalBlockId,
+      edit_target: input.editTarget,
+    }),
+  });
+
+  return {
+    case_id: payload.case_id,
+    report_id: payload.report_id,
+    section_id: payload.section_id,
+    canonical_block_id: payload.canonical_block_id,
+    status: payload.status,
+    report_sections: adaptReportSections(payload.report),
+  };
 }

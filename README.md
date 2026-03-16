@@ -29,7 +29,7 @@ PYTHONPATH=. uvicorn app.main:app --reload
 - **Backend:** Python, FastAPI, Pydantic  
 - **AI:** Google Gemini (optional)  
 - **Storage:** Firestore for job metadata, GCS for report artifacts and job payloads
-- **Execution:** Cloud Tasks dispatches Cloud Run Jobs for report and reconstruction workers
+- **Execution:** Cloud Tasks dispatches Cloud Run Jobs for report, analysis, and reconstruction workers
 
 ## Private GCS artifact delivery
 

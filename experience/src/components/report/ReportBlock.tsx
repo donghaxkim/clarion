@@ -182,6 +182,35 @@ export function ReportBlock({ section, streamingText, isStreaming, onEdit }: Rep
     );
   }
 
+  if (section.block_type === 'video') {
+    return (
+      <div style={{ ...wrapperStyle }}>
+        {section.media ? (
+          <video
+            controls
+            src={section.media}
+            style={{ width: '100%', borderRadius: '6px', display: 'block' }}
+          />
+        ) : (
+          <div
+            style={{
+              width: '100%',
+              height: '220px',
+              background: 'var(--bg-elevated)',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>[Video: {section.id}]</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // DEFAULT: TEXT
   return (
     <div

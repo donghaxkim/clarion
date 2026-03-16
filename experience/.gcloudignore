@@ -1,0 +1,13 @@
+.gcloudignore
+.git
+.gitignore
+.env.local
+.next
+node_modules
+coverage
+.vercel
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+pnpm-debug.log
+*.tsbuildinfo

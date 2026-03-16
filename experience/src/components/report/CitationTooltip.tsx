@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useRef, useState } from 'react';
+
 import { Citation } from '@/lib/types';
 
 interface CitationTooltipProps {
@@ -19,7 +20,7 @@ export function CitationTooltip({ citation, index }: CitationTooltipProps) {
         className="citation-ref"
         onMouseEnter={() => setVisible(true)}
         onMouseLeave={() => setVisible(false)}
-        onClick={() => setVisible((v) => !v)}
+        onClick={() => setVisible((value) => !value)}
       >
         [{index + 1}]
       </sup>
@@ -55,9 +56,7 @@ export function CitationTooltip({ citation, index }: CitationTooltipProps) {
               whiteSpace: 'nowrap',
             }}
           >
-            {citation.source}
-            {citation.page && ` · p. ${citation.page}`}
-            {citation.time && ` · ${citation.time}`}
+            {citation.source_label}
           </span>
           <span
             style={{

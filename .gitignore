@@ -21,3 +21,4 @@ frontend/.next/
 .tmp_report_jobs.json
 .artifacts/
 plans/
+mock-evidence/

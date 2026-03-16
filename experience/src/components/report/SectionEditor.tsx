@@ -3,31 +3,44 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send } from 'lucide-react';
-import { ReportSection } from '@/lib/types';
+import { EditSectionResponse, ReportSection } from '@/lib/types';
 import { editSection } from '@/lib/api';
 
 interface SectionEditorProps {
   section: ReportSection;
   caseId: string;
   onClose: () => void;
-  onUpdated: (sectionId: string) => void;
+  onUpdated: (response: EditSectionResponse) => void | Promise<void>;
 }
 
 export function SectionEditor({ section, caseId, onClose, onUpdated }: SectionEditorProps) {
   const [instruction, setInstruction] = useState('');
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!instruction.trim() || loading) return;
     setLoading(true);
+    setError(null);
     try {
-      await editSection(caseId, section.id, instruction.trim());
+      const response = await editSection({
+        caseId,
+        sectionId: section.id,
+        instruction: instruction.trim(),
+        canonicalBlockId: section.canonical_block_id,
+        editTarget: section.edit_target,
+      });
       setDone(true);
-      onUpdated(section.id);
+      await onUpdated(response);
       setTimeout(onClose, 1200);
-    } catch {
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : 'Unable to update this section.',
+      );
       setLoading(false);
     }
   }
@@ -152,6 +165,11 @@ export function SectionEditor({ section, caseId, onClose, onUpdated }: SectionEd
                 <Send size={13} strokeWidth={1.5} />
                 {loading ? 'Updating...' : 'Apply'}
               </button>
+              {error && (
+                <p style={{ margin: 0, fontSize: '12px', color: 'var(--severity-high)' }}>
+                  {error}
+                </p>
+              )}
             </form>
           )}
         </div>

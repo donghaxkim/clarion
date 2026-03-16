@@ -1,19 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, Users, AlertTriangle } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { AlertTriangle, FileText, Users } from 'lucide-react';
 
-import { ReportBlock } from '@/components/report/ReportBlock';
-import { SectionEditor } from '@/components/report/SectionEditor';
 import { EntityChip } from '@/components/analysis/EntityChip';
 import { EntityPanel } from '@/components/entity/EntityPanel';
+import { ReportBlock } from '@/components/report/ReportBlock';
+import { SectionEditor } from '@/components/report/SectionEditor';
 import { getEvidenceColor } from '@/components/ui/Badge';
-
-import { ReportSection, Entity, ParsedEvidence } from '@/lib/types';
-import { getCase } from '@/lib/api';
-import { MOCK_FULL_CASE, MOCK_REPORT_SECTIONS } from '@/lib/mock-data';
+import { getCase, getCaseReport, streamReport } from '@/lib/api';
+import { CaseReportState, Entity, FullCase, ParsedEvidence, ReportSection } from '@/lib/types';
 
 interface SectionState {
   section: ReportSection;
@@ -22,75 +20,152 @@ interface SectionState {
   complete: boolean;
 }
 
+function isPendingAnalysisStatus(status?: string | null) {
+  return status === 'queued' || status === 'running' || status === 'stale';
+}
+
+function buildSectionStates(sections: ReportSection[], status: string): SectionState[] {
+  const terminal = status === 'completed' || status === 'failed';
+  return sections.map((section, index) => ({
+    section,
+    text: section.text ?? '',
+    streaming: !terminal && index === sections.length - 1,
+    complete: terminal || index < sections.length - 1,
+  }));
+}
+
 export default function ReportPage() {
   const params = useParams();
   const caseId = params.id as string;
 
+  const [caseData, setCaseData] = useState<FullCase | null>(null);
+  const [reportState, setReportState] = useState<CaseReportState | null>(null);
   const [sections, setSections] = useState<SectionState[]>([]);
   const [loading, setLoading] = useState(true);
-  const [evidence, setEvidence] = useState<ParsedEvidence[]>([]);
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [contradictionCount, setContradictionCount] = useState(0);
-  const [missingCount, setMissingCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const [editingSection, setEditingSection] = useState<ReportSection | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const refreshTimerRef = useRef<number | null>(null);
 
-  // Load complete case data including already-generated report sections
-  useEffect(() => {
-    async function loadCase() {
-      try {
-        const c = await getCase(caseId);
-        setEvidence(c.evidence);
-        setEntities(c.entities);
-        setContradictionCount(c.contradictions.length);
-        setMissingCount(c.missing_info.length);
+  const applyReportState = useCallback((nextState: CaseReportState) => {
+    setReportState(nextState);
+    setSections(buildSectionStates(nextState.report_sections, nextState.status));
+  }, []);
 
-        const reportSections = c.report_sections?.length
-          ? c.report_sections
-          : MOCK_REPORT_SECTIONS;
-
-        setSections(
-          reportSections.map((s) => ({
-            section: s,
-            text: s.text || '',
-            streaming: false,
-            complete: true,
-          }))
-        );
-      } catch {
-        const c = MOCK_FULL_CASE;
-        setEvidence(c.evidence);
-        setEntities(c.entities);
-        setContradictionCount(c.contradictions.length);
-        setMissingCount(c.missing_info.length);
-
-        setSections(
-          MOCK_REPORT_SECTIONS.map((s) => ({
-            section: s,
-            text: s.text || '',
-            streaming: false,
-            complete: true,
-          }))
-        );
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadCase();
+  const refreshCaseState = useCallback(async () => {
+    const nextCase = await getCase(caseId);
+    setCaseData(nextCase);
   }, [caseId]);
 
-  function handleSectionUpdated(sectionId: string) {
-    setSections((prev) =>
-      prev.map((s) =>
-        s.section.id === sectionId ? { ...s, streaming: false, complete: true } : s
-      )
+  const refreshReportState = useCallback(async () => {
+    const nextState = await getCaseReport(caseId);
+    applyReportState(nextState);
+  }, [applyReportState, caseId]);
+
+  const loadInitialData = useCallback(async () => {
+    const [nextCase, nextReport] = await Promise.all([getCase(caseId), getCaseReport(caseId)]);
+    setCaseData(nextCase);
+    applyReportState(nextReport);
+  }, [applyReportState, caseId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        await loadInitialData();
+        if (!cancelled) {
+          setError(null);
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : 'Unable to load this report right now.',
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadInitialData]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!reportState?.job_id || reportState.status === 'completed' || reportState.status === 'failed') {
+      return;
+    }
+
+    const jobId = reportState.job_id;
+    return streamReport(
+      jobId,
+      () => {
+        if (refreshTimerRef.current !== null) {
+          window.clearTimeout(refreshTimerRef.current);
+        }
+        refreshTimerRef.current = window.setTimeout(() => {
+          void Promise.all([refreshReportState(), refreshCaseState()]);
+        }, 120);
+      },
+      () => {
+        void Promise.all([refreshReportState(), refreshCaseState()]);
+      },
     );
-  }
+  }, [refreshCaseState, refreshReportState, reportState?.job_id, reportState?.status]);
+
+  useEffect(() => {
+    if (!isPendingAnalysisStatus(caseData?.analysis_status)) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshCaseState();
+    }, 1500);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [caseData?.analysis_status, refreshCaseState]);
+
+  const handleSectionUpdated = useCallback(async (_response?: unknown) => {
+    try {
+      await refreshReportState();
+      setError(null);
+    } catch (refreshError) {
+      setError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : 'Unable to refresh the updated report.',
+      );
+    }
+  }, [refreshReportState]);
+
+  const evidence: ParsedEvidence[] = caseData?.evidence ?? [];
+  const entities: Entity[] = caseData?.report_relevant_entities ?? [];
+  const contradictionCount = caseData?.contradictions.length ?? 0;
+  const missingCount = caseData?.missing_info.length ?? 0;
+  const analysisFailed = caseData?.analysis_status === 'failed';
+  const analysisFailureMessage =
+    caseData?.analysis_error || 'Case analysis is unavailable right now.';
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
-      {/* Top bar */}
       <header
         style={{
           height: '48px',
@@ -112,20 +187,56 @@ export default function ReportPage() {
           / report
         </span>
         <div style={{ flex: 1 }} />
-        {loading ? (
-          <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-            Loading...
-          </span>
-        ) : (
-          <span style={{ fontSize: '12px', color: 'var(--severity-low)' }}>
-            Complete
-          </span>
-        )}
+        <span
+          style={{
+            fontSize: '12px',
+            color:
+              reportState?.status === 'failed'
+                ? 'var(--severity-high)'
+                : reportState?.status === 'completed'
+                  ? 'var(--severity-low)'
+                  : 'var(--text-tertiary)',
+          }}
+        >
+          {loading
+            ? 'Loading...'
+            : reportState?.status === 'completed'
+              ? 'Complete'
+              : reportState?.status === 'failed'
+                ? 'Failed'
+                : 'Generating...'}
+        </span>
       </header>
 
-      {/* Three-column layout */}
+      {error && (
+        <div
+          style={{
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-surface)',
+            padding: '10px 24px',
+            fontSize: '12px',
+            color: 'var(--severity-high)',
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {analysisFailed && (
+        <div
+          style={{
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-surface)',
+            padding: '10px 24px',
+            fontSize: '12px',
+            color: 'var(--severity-med)',
+          }}
+        >
+          {analysisFailureMessage}
+        </div>
+      )}
+
       <div style={{ flex: 1, display: 'flex', maxWidth: '1280px', margin: '0 auto', width: '100%' }}>
-        {/* Left sidebar: Evidence + Entities + Issues */}
         <aside
           style={{
             width: '240px',
@@ -138,7 +249,6 @@ export default function ReportPage() {
             height: 'calc(100vh - 48px)',
           }}
         >
-          {/* Evidence */}
           <div style={{ marginBottom: '24px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
               <FileText size={13} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
@@ -146,9 +256,9 @@ export default function ReportPage() {
                 Evidence
               </span>
             </div>
-            {evidence.map((ev) => (
+            {evidence.map((item) => (
               <div
-                key={ev.evidence_id}
+                key={item.evidence_id}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -161,7 +271,7 @@ export default function ReportPage() {
                   style={{
                     width: '3px',
                     height: '14px',
-                    background: getEvidenceColor(ev.evidence_type),
+                    background: getEvidenceColor(item.evidence_type),
                     borderRadius: '1px',
                     flexShrink: 0,
                   }}
@@ -175,15 +285,14 @@ export default function ReportPage() {
                     whiteSpace: 'nowrap',
                     flex: 1,
                   }}
-                  title={ev.filename}
+                  title={item.filename}
                 >
-                  {ev.filename}
+                  {item.filename}
                 </span>
               </div>
             ))}
           </div>
 
-          {/* Entities */}
           <div style={{ marginBottom: '24px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
               <Users size={13} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
@@ -193,16 +302,11 @@ export default function ReportPage() {
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
               {entities.slice(0, 8).map((entity) => (
-                <EntityChip
-                  key={entity.id}
-                  entity={entity}
-                  onClick={(e) => setSelectedEntity(e)}
-                />
+                <EntityChip key={entity.id} entity={entity} onClick={(nextEntity) => setSelectedEntity(nextEntity)} />
               ))}
             </div>
           </div>
 
-          {/* Issues */}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
               <AlertTriangle size={13} strokeWidth={1.5} style={{ color: 'var(--text-tertiary)' }} />
@@ -211,6 +315,19 @@ export default function ReportPage() {
               </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {analysisFailed && (
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--severity-med)',
+                    background: 'var(--severity-med-bg)',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  Analysis unavailable
+                </div>
+              )}
               {contradictionCount > 0 && (
                 <div style={{ fontSize: '12px', color: 'var(--severity-high)', background: 'var(--severity-high-bg)', padding: '4px 8px', borderRadius: '4px' }}>
                   {contradictionCount} contradiction{contradictionCount !== 1 ? 's' : ''}
@@ -225,9 +342,7 @@ export default function ReportPage() {
           </div>
         </aside>
 
-        {/* Center: Report document */}
         <main
-          ref={scrollRef}
           style={{
             flex: 1,
             overflowY: 'auto',
@@ -237,18 +352,18 @@ export default function ReportPage() {
           }}
         >
           <AnimatePresence>
-            {sections.map((s, i) => (
+            {sections.map((item) => (
               <motion.div
-                key={s.section.id}
+                key={item.section.id}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, ease: 'easeOut' }}
                 style={{ position: 'relative' }}
               >
                 <ReportBlock
-                  section={s.section}
-                  streamingText={s.text}
-                  isStreaming={false}
+                  section={item.section}
+                  streamingText={item.text}
+                  isStreaming={item.streaming}
                   onEdit={(section) => setEditingSection(section)}
                 />
               </motion.div>
@@ -261,14 +376,18 @@ export default function ReportPage() {
             </p>
           )}
 
+          {!loading && sections.length === 0 && !error && (
+            <p style={{ color: 'var(--text-tertiary)', fontSize: '13px', fontStyle: 'italic' }}>
+              Report generation has started, but no sections are ready yet.
+            </p>
+          )}
+
           {!loading && <div style={{ height: '80px' }} />}
         </main>
 
-        {/* Right: empty gutter (for pencil icons) */}
         <div style={{ width: '48px', flexShrink: 0 }} />
       </div>
 
-      {/* Section editor panel */}
       {editingSection && (
         <SectionEditor
           section={editingSection}
@@ -278,11 +397,12 @@ export default function ReportPage() {
         />
       )}
 
-      {/* Entity panel */}
       {selectedEntity && (
         <EntityPanel
           entity={selectedEntity}
           caseId={caseId}
+          analysisStatus={caseData?.analysis_status}
+          analysisError={caseData?.analysis_error}
           onClose={() => setSelectedEntity(null)}
         />
       )}

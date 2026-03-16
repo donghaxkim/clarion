@@ -1,65 +1,53 @@
 'use client';
 
-import React, {
-  useState,
-  useCallback,
-  useMemo,
-  useEffect,
-  useRef,
-  createContext,
-  useContext,
-} from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow,
-  ReactFlowProvider,
   Background,
   BackgroundVariant,
-  useNodesState,
-  useEdgesState,
-  useReactFlow,
-  NodeTypes,
+  Edge,
+  EdgeChange,
   EdgeTypes,
   Node,
-  Edge,
   NodeChange,
-  EdgeChange,
+  NodeTypes,
+  ReactFlow,
+  ReactFlowProvider,
+  useEdgesState,
+  useNodesState,
+  useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { EvidenceNode, EvidenceNodeData } from './nodes/EvidenceNode';
-import { ClusterLabel } from './nodes/ClusterLabel';
-import { InsightBadge } from './nodes/InsightBadge';
-import { EntityThread } from './edges/EntityThread';
-import { ContradictionThread } from './edges/ContradictionThread';
-import { CorroborationThread } from './edges/CorroborationThread';
-import { TimelineThread } from './edges/TimelineThread';
+import { AgentOrb } from '@/components/agent/AgentOrb';
+import { ReportProgressSidebar, SectionState } from '@/components/report/ReportProgressSidebar';
+import {
+  analyzeCase,
+  createCase,
+  generateReport,
+  getReportJob,
+  streamReport,
+  uploadFiles,
+} from '@/lib/api';
+import { MOCK_ANALYSIS, MOCK_CASE_ID, MOCK_CASE_TITLE, MOCK_EVIDENCE } from '@/lib/mock-data';
+import { AnalysisResponse, ParsedEvidence, ReportSection } from '@/lib/types';
+
 import { CanvasToolbar } from './controls/CanvasToolbar';
 import { ZoomControls } from './controls/ZoomControls';
+import { ContradictionThread } from './edges/ContradictionThread';
+import { CorroborationThread } from './edges/CorroborationThread';
+import { EntityThread } from './edges/EntityThread';
+import { TimelineThread } from './edges/TimelineThread';
 import { useAutoCluster, getClusterForNode } from './hooks/useAutoCluster';
+import { buildEdgesFromAnalysis, staggerEdgeReveal } from './hooks/useEdgeBuilder';
 import { useFileDrop } from './hooks/useFileDrop';
 import { useZoomVisibility } from './hooks/useZoomVisibility';
-import { buildEdgesFromAnalysis, staggerEdgeReveal } from './hooks/useEdgeBuilder';
+import { ClusterLabel } from './nodes/ClusterLabel';
+import { EvidenceNode, EvidenceNodeData } from './nodes/EvidenceNode';
+import { InsightBadge } from './nodes/InsightBadge';
 import { computeClusterLayout } from './utils/layout';
 
-import { ParsedEvidence, AnalysisResponse } from '@/lib/types';
-import { createCase, uploadFiles, analyzeCase, generateReport, streamReport } from '@/lib/api';
-import { ReportProgressSidebar, SectionState } from '@/components/report/ReportProgressSidebar';
-import { AgentOrb } from '@/components/agent/AgentOrb';
-import {
-  MOCK_CASE_ID,
-  MOCK_EVIDENCE,
-  MOCK_ANALYSIS,
-} from '@/lib/mock-data';
-
-// ─── Context ───────────────────────────────────────────────────────────────────
-
-interface CanvasCtx {
-  connectedNodeIds: Set<string>;
-}
-
-const CanvasContext = createContext<CanvasCtx>({ connectedNodeIds: new Set() });
-
-// ─── Node / Edge Types ─────────────────────────────────────────────────────────
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
+const DEFAULT_CASE_TITLE = 'Untitled Matter';
 
 const nodeTypes: NodeTypes = {
   evidenceNode: EvidenceNode,
@@ -74,33 +62,20 @@ const edgeTypes: EdgeTypes = {
   timelineThread: TimelineThread,
 };
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
-
-function evidenceToNode(ev: ParsedEvidence, position: { x: number; y: number }): Node<EvidenceNodeData> {
-  return {
-    id: ev.evidence_id,
-    type: 'evidenceNode',
-    position,
-    data: {
-      evidenceId: ev.evidence_id,
-      filename: ev.filename,
-      evidenceType: ev.evidence_type,
-      summary: ev.summary,
-      entities: ev.entities,
-      entityCount: ev.entity_count,
-      factCount: 0,
-      labels: ev.labels,
-      nodeStatus: ev.status === 'parsed' ? 'complete' : 'parsing',
-      hasConnections: false,
-    },
-  };
+export interface WorkspaceSummary {
+  caseId: string | null;
+  title: string;
+  statusText: string;
+  evidenceCount: number;
 }
 
+type EvidenceCanvasNode = Node<EvidenceNodeData, 'evidenceNode'>;
+
 function buildInitialMockNodes(): Node[] {
-  const evidenceNodes = MOCK_EVIDENCE.map((ev, i) => ({
+  const evidenceNodes = MOCK_EVIDENCE.map((ev, index) => ({
     id: ev.evidence_id,
     type: 'evidenceNode' as const,
-    position: { x: (i % 3) * 300, y: Math.floor(i / 3) * 400 },
+    position: { x: (index % 3) * 300, y: Math.floor(index / 3) * 400 },
     data: {
       evidenceId: ev.evidence_id,
       filename: ev.filename,
@@ -108,196 +83,303 @@ function buildInitialMockNodes(): Node[] {
       summary: ev.summary,
       entities: ev.entities,
       entityCount: ev.entity_count,
-      factCount: 6 + i * 2,
+      factCount: 6 + index * 2,
       labels: ev.labels,
       nodeStatus: 'complete' as const,
+      isIndexed: true,
       hasConnections: false,
     } satisfies EvidenceNodeData,
   }));
 
-  // Compute clustered positions
   const positions = computeClusterLayout(evidenceNodes);
-  const posMap = new Map(positions.map((p) => [p.id, p]));
+  const positionMap = new Map(positions.map((item) => [item.id, item]));
 
-  const positionedNodes: Node[] = evidenceNodes.map((n) => {
-    const pos = posMap.get(n.id);
-    return pos ? { ...n, position: { x: pos.x, y: pos.y } } : n;
+  const positionedEvidenceNodes: Node[] = evidenceNodes.map((node) => {
+    const position = positionMap.get(node.id);
+    return position ? { ...node, position: { x: position.x, y: position.y } } : node;
   });
 
-  // Add cluster labels
-  const labelNodes: Node[] = positions
-    .filter((p) => p.type === 'clusterLabel')
-    .map((lp) => ({
-      id: lp.id,
+  const clusterLabelNodes: Node[] = positions
+    .filter((item) => item.type === 'clusterLabel')
+    .map((item) => ({
+      id: item.id,
       type: 'clusterLabel',
-      position: { x: lp.x, y: lp.y },
-      data: lp.data ?? {},
+      position: { x: item.x, y: item.y },
+      data: item.data ?? {},
       selectable: false,
     }));
 
-  return [...positionedNodes, ...labelNodes];
+  return [...positionedEvidenceNodes, ...clusterLabelNodes];
+}
+
+function updateEvidenceNodeByFlowId(
+  flowNodeId: string,
+  updater: (node: EvidenceCanvasNode) => EvidenceCanvasNode,
+) {
+  return (prev: Node[]) =>
+    prev.map((node) =>
+      isEvidenceCanvasNode(node) && node.id === flowNodeId ? updater(node) : node,
+    );
 }
 
 function buildInitialMockEdges(nodes: Node[]): Edge[] {
-  const evidenceNodes = nodes.filter((n) => n.type === 'evidenceNode');
-  const edges = buildEdgesFromAnalysis(MOCK_ANALYSIS, evidenceNodes);
-  return edges.map((e) => ({
-    ...e,
+  const evidenceNodes = nodes.filter((node) => node.type === 'evidenceNode');
+  return buildEdgesFromAnalysis(MOCK_ANALYSIS, evidenceNodes).map((edge) => ({
+    ...edge,
     style: {
-      opacity: e.type === 'contradictionThread' ? 0.65 : 0.4,
+      opacity: edge.type === 'contradictionThread' ? 0.65 : 0.4,
     },
-    className: e.type === 'contradictionThread' ? 'edge-contradiction-animated' : undefined,
+    className: edge.type === 'contradictionThread' ? 'edge-contradiction-animated' : undefined,
   }));
 }
 
-// ─── Inner Canvas (uses useReactFlow) ─────────────────────────────────────────
+function isEvidenceCanvasNode(node: Node): node is EvidenceCanvasNode {
+  return node.type === 'evidenceNode';
+}
 
-function EvidenceCanvasInner() {
+function buildWorkspaceStatusText({
+  evidenceCount,
+  isAnalyzing,
+  isGenerating,
+  analysisDone,
+}: {
+  evidenceCount: number;
+  isAnalyzing: boolean;
+  isGenerating: boolean;
+  analysisDone: boolean;
+}): string {
+  const fileLabel =
+    evidenceCount === 0
+      ? 'No files indexed'
+      : `${evidenceCount} file${evidenceCount === 1 ? '' : 's'} indexed`;
+
+  if (isGenerating) {
+    return `${fileLabel} · generating report`;
+  }
+  if (isAnalyzing) {
+    return `${fileLabel} · analyzing`;
+  }
+  if (analysisDone && evidenceCount > 0) {
+    return `${fileLabel} · analyzed`;
+  }
+  return fileLabel;
+}
+
+function buildSectionStates(sections: ReportSection[], status: string): SectionState[] {
+  const terminal = status === 'completed' || status === 'failed';
+  return sections.map((section, index) => ({
+    section,
+    text: section.text ?? '',
+    streaming: !terminal && index === sections.length - 1,
+    complete: terminal || index < sections.length - 1,
+  }));
+}
+
+function buildInitialNodes() {
+  return USE_MOCK ? buildInitialMockNodes() : [];
+}
+
+function buildInitialEdges(nodes: Node[]) {
+  return USE_MOCK ? buildInitialMockEdges(nodes) : [];
+}
+
+function EvidenceCanvasInner({
+  onWorkspaceChange,
+}: {
+  onWorkspaceChange?: (summary: WorkspaceSummary) => void;
+}) {
   const { fitView } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const nodesRef = useRef<Node[]>([]);
+  const streamCleanupRef = useRef<(() => void) | null>(null);
+  const refreshTimerRef = useRef<number | null>(null);
 
-  const initialNodes = useMemo(() => buildInitialMockNodes(), []);
+  const initialNodes = useMemo(() => buildInitialNodes(), []);
+  const initialEdges = useMemo(() => buildInitialEdges(initialNodes), [initialNodes]);
+
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-
-  // Keep a ref to nodes so handleNodesChange can read pre-change positions
-  // without being recreated on every node update
-  const nodesRef = useRef(nodes);
-  nodesRef.current = nodes;
-
-  const initialEdges = useMemo(() => buildInitialMockEdges(initialNodes), [initialNodes]);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-
-  const [caseId, setCaseId] = useState<string | null>(MOCK_CASE_ID);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(MOCK_ANALYSIS);
+  const [caseId, setCaseId] = useState<string | null>(USE_MOCK ? MOCK_CASE_ID : null);
+  const [caseTitle, setCaseTitle] = useState(USE_MOCK ? MOCK_CASE_TITLE : DEFAULT_CASE_TITLE);
+  const [analysisDone, setAnalysisDone] = useState(USE_MOCK);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisDone, setAnalysisDone] = useState(true); // true because mock data shows analysis done
   const [isReclustering, setIsReclustering] = useState(false);
+  const [isSnappingBack, setIsSnappingBack] = useState(false);
   const [showAnalyzeWave, setShowAnalyzeWave] = useState(false);
-
-  // Report sidebar state
   const [reportSidebarOpen, setReportSidebarOpen] = useState(false);
   const [reportSections, setReportSections] = useState<SectionState[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [reportDone, setReportDone] = useState(false);
 
-  // Fit view after mount
+  nodesRef.current = nodes;
+
   useEffect(() => {
-    const timer = setTimeout(() => fitView({ duration: 600, padding: 0.12 }), 200);
-    return () => clearTimeout(timer);
+    const timer = window.setTimeout(() => fitView({ duration: 600, padding: 0.12 }), 200);
+    return () => window.clearTimeout(timer);
   }, [fitView]);
 
-  // Zoom-based edge visibility
+  useEffect(
+    () => () => {
+      streamCleanupRef.current?.();
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useZoomVisibility();
 
-  // Auto-cluster hook
   const { cluster } = useAutoCluster({
     onClusterStart: () => setIsReclustering(true),
     onClusterEnd: () => setIsReclustering(false),
   });
 
-  // Track which nodes have connections
   const connectedNodeIds = useMemo(() => {
     const ids = new Set<string>();
-    edges.forEach((e) => {
-      ids.add(e.source);
-      ids.add(e.target);
-    });
+    for (const edge of edges) {
+      ids.add(edge.source);
+      ids.add(edge.target);
+    }
     return ids;
   }, [edges]);
 
-  // Update node data when connections change
   useEffect(() => {
     setNodes((prev) =>
       prev.map((node) => {
-        if (node.type !== 'evidenceNode') return node;
-        const hasConnections = connectedNodeIds.has(node.id);
-        if ((node.data as EvidenceNodeData).hasConnections !== hasConnections) {
-          return { ...node, data: { ...node.data, hasConnections } };
+        if (node.type !== 'evidenceNode') {
+          return node;
         }
-        return node;
-      })
+        const hasConnections = connectedNodeIds.has(node.id);
+        if ((node.data as EvidenceNodeData).hasConnections === hasConnections) {
+          return node;
+        }
+        return { ...node, data: { ...node.data, hasConnections } };
+      }),
     );
   }, [connectedNodeIds, setNodes]);
 
-  // ── Snap-back animation state ───────────────────────────────────────────
-  const [isSnappingBack, setIsSnappingBack] = useState(false);
+  const evidenceCount = nodes.filter((node) => node.type === 'evidenceNode').length;
+  const indexedEvidenceCount = nodes.filter(
+    (node) => node.type === 'evidenceNode' && Boolean((node.data as EvidenceNodeData).isIndexed),
+  ).length;
 
-  // ── Handle node drag: group-drag for clusters + snap-back for cards ────
+  useEffect(() => {
+    onWorkspaceChange?.({
+      caseId,
+      title: caseTitle,
+      statusText: buildWorkspaceStatusText({
+        evidenceCount: indexedEvidenceCount,
+        isAnalyzing,
+        isGenerating,
+        analysisDone,
+      }),
+      evidenceCount: indexedEvidenceCount,
+    });
+  }, [
+    analysisDone,
+    caseId,
+    caseTitle,
+    indexedEvidenceCount,
+    isAnalyzing,
+    isGenerating,
+    onWorkspaceChange,
+  ]);
+
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
-      // Read pre-change positions from ref (before onNodesChange mutates state)
       const preNodes = nodesRef.current;
       const extraChanges: NodeChange[] = [];
 
       for (const change of changes) {
-        if (change.type !== 'position' || !change.dragging || !change.position) continue;
+        if (change.type !== 'position' || !change.dragging || !change.position) {
+          continue;
+        }
 
-        const node = preNodes.find((n) => n.id === change.id);
-        if (!node || node.type !== 'clusterLabel') continue;
+        const node = preNodes.find((candidate) => candidate.id === change.id);
+        if (!node || node.type !== 'clusterLabel') {
+          continue;
+        }
 
         const childIds = (node.data as Record<string, unknown>).childIds as string[] | undefined;
-        if (!childIds?.length) continue;
+        if (!childIds?.length) {
+          continue;
+        }
 
         const dx = change.position.x - node.position.x;
         const dy = change.position.y - node.position.y;
-        if (dx === 0 && dy === 0) continue;
+        if (dx === 0 && dy === 0) {
+          continue;
+        }
 
-        // Inject position changes for every child so they move with the header
         for (const childId of childIds) {
-          const child = preNodes.find((n) => n.id === childId);
-          if (child) {
-            extraChanges.push({
-              type: 'position',
-              id: childId,
-              position: { x: child.position.x + dx, y: child.position.y + dy },
-            } as NodeChange);
+          const child = preNodes.find((candidate) => candidate.id === childId);
+          if (!child) {
+            continue;
           }
+          extraChanges.push({
+            type: 'position',
+            id: childId,
+            position: { x: child.position.x + dx, y: child.position.y + dy },
+          } as NodeChange);
         }
       }
 
-      // Apply original + child-movement changes together
       onNodesChange([...changes, ...extraChanges]);
 
-      // Post-change bookkeeping
       const pinIds: string[] = [];
       const snapBacks: { id: string; pos: { x: number; y: number } }[] = [];
       const validUpdates: { id: string; pos: { x: number; y: number } }[] = [];
 
       for (const change of changes) {
-        if (change.type !== 'position') continue;
+        if (change.type !== 'position') {
+          continue;
+        }
 
-        const preNode = preNodes.find((n) => n.id === change.id);
-        if (!preNode) continue;
+        const preNode = preNodes.find((node) => node.id === change.id);
+        if (!preNode) {
+          continue;
+        }
 
-        // Pin evidence nodes when dragged
         if (change.dragging && preNode.type === 'evidenceNode') {
           pinIds.push(change.id);
         }
 
-        // On drag end: snap-back check
         if (!change.dragging && change.position && preNode.type === 'evidenceNode') {
-          const cluster = getClusterForNode(change.id, preNodes);
-          if (!cluster) continue;
+          const clusterNode = getClusterForNode(change.id, preNodes);
+          if (!clusterNode) {
+            continue;
+          }
 
-          const childIds = (cluster.data as Record<string, unknown>).childIds as string[];
+          const childIds = (clusterNode.data as Record<string, unknown>).childIds as string[];
           const siblings = preNodes.filter(
-            (n) => childIds.includes(n.id) && n.id !== change.id
+            (node) => childIds.includes(node.id) && node.id !== change.id,
           );
-          if (siblings.length === 0) continue;
+          if (siblings.length === 0) {
+            continue;
+          }
 
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (const s of siblings) {
-            minX = Math.min(minX, s.position.x);
-            minY = Math.min(minY, s.position.y);
-            maxX = Math.max(maxX, s.position.x);
-            maxY = Math.max(maxY, s.position.y);
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+
+          for (const sibling of siblings) {
+            minX = Math.min(minX, sibling.position.x);
+            minY = Math.min(minY, sibling.position.y);
+            maxX = Math.max(maxX, sibling.position.x);
+            maxY = Math.max(maxY, sibling.position.y);
           }
 
           const margin = 150;
           const { x, y } = change.position;
 
-          if (x < minX - margin || x > maxX + margin || y < minY - margin || y > maxY + margin) {
-            // Snap back — use lastValidPosition, or the position it had before this drag
+          if (
+            x < minX - margin ||
+            x > maxX + margin ||
+            y < minY - margin ||
+            y > maxY + margin
+          ) {
             const lastValid = (preNode.data as Record<string, unknown>).lastValidPosition as
               | { x: number; y: number }
               | undefined;
@@ -308,69 +390,102 @@ function EvidenceCanvasInner() {
         }
       }
 
-      // Apply pins, snap-backs, and valid-position updates in one batch
-      if (pinIds.length > 0 || snapBacks.length > 0 || validUpdates.length > 0) {
-        if (snapBacks.length > 0) {
-          setIsSnappingBack(true);
-          setTimeout(() => setIsSnappingBack(false), 400);
-        }
-
-        const snapMap = new Map(snapBacks.map((s) => [s.id, s.pos]));
-        const validMap = new Map(validUpdates.map((v) => [v.id, v.pos]));
-        const pinSet = new Set(pinIds);
-
-        setNodes((prev) =>
-          prev.map((n) => {
-            const snap = snapMap.get(n.id);
-            if (snap) return { ...n, position: snap };
-
-            let updated = n;
-            if (pinSet.has(n.id) && !(n.data as Record<string, unknown>).pinned) {
-              updated = { ...updated, data: { ...updated.data, pinned: true } };
-            }
-            const vPos = validMap.get(n.id);
-            if (vPos) {
-              updated = { ...updated, data: { ...updated.data, lastValidPosition: vPos } };
-            }
-            return updated;
-          })
-        );
+      if (pinIds.length === 0 && snapBacks.length === 0 && validUpdates.length === 0) {
+        return;
       }
+
+      if (snapBacks.length > 0) {
+        setIsSnappingBack(true);
+        window.setTimeout(() => setIsSnappingBack(false), 400);
+      }
+
+      const snapMap = new Map(snapBacks.map((item) => [item.id, item.pos]));
+      const validMap = new Map(validUpdates.map((item) => [item.id, item.pos]));
+      const pinSet = new Set(pinIds);
+
+      setNodes((prev) =>
+        prev.map((node) => {
+          const snap = snapMap.get(node.id);
+          if (snap) {
+            return { ...node, position: snap };
+          }
+
+          let nextNode = node;
+          if (pinSet.has(node.id) && !(node.data as Record<string, unknown>).pinned) {
+            nextNode = { ...nextNode, data: { ...nextNode.data, pinned: true } };
+          }
+          const validPosition = validMap.get(node.id);
+          if (validPosition) {
+            nextNode = {
+              ...nextNode,
+              data: { ...nextNode.data, lastValidPosition: validPosition },
+            };
+          }
+          return nextNode;
+        }),
+      );
     },
-    [onNodesChange, setNodes]
+    [onNodesChange, setNodes],
   );
 
-  // ── File handling ────────────────────────────────────────────────────────
+  const refreshReportJob = useCallback(async (jobId: string) => {
+    const snapshot = await getReportJob(jobId);
+    setReportSections(buildSectionStates(snapshot.report_sections, snapshot.status));
+    setIsGenerating(snapshot.status !== 'completed' && snapshot.status !== 'failed');
+    setReportDone(snapshot.status === 'completed');
+  }, []);
+
+  const scheduleReportRefresh = useCallback(
+    (jobId: string) => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+      refreshTimerRef.current = window.setTimeout(() => {
+        void refreshReportJob(jobId);
+      }, 120);
+    },
+    [refreshReportJob],
+  );
+
+  const reclusterEvidenceNodes = useCallback(() => {
+    window.setTimeout(() => {
+      setNodes((prev) => {
+        const evidenceNodes = prev.filter(isEvidenceCanvasNode);
+        cluster(evidenceNodes);
+        return prev;
+      });
+    }, 100);
+  }, [cluster, setNodes]);
 
   const handleFiles = useCallback(
     async (files: File[], position: { x: number; y: number }) => {
-      let id = caseId;
-      if (!id) {
-        try {
-          const res = await createCase({});
-          id = res.case_id;
-        } catch {
-          id = MOCK_CASE_ID;
-        }
-        setCaseId(id);
+      let resolvedCaseId = caseId;
+
+      if (!resolvedCaseId) {
+        const response = await createCase({ title: DEFAULT_CASE_TITLE });
+        resolvedCaseId = response.case_id;
+        setCaseId(response.case_id);
+        setCaseTitle(DEFAULT_CASE_TITLE);
       }
 
-      // Spread multiple files slightly from the drop point
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const nodeId = `upload-${Date.now()}-${i}`;
-        const filePos = {
-          x: position.x + i * 20 - (files.length * 10),
-          y: position.y + i * 20,
+      if (!resolvedCaseId) {
+        return;
+      }
+
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const flowNodeId = `upload-${Date.now()}-${index}`;
+        const filePosition = {
+          x: position.x + index * 20 - files.length * 10,
+          y: position.y + index * 20,
         };
 
-        // Add uploading node
         const uploadingNode: Node<EvidenceNodeData> = {
-          id: nodeId,
+          id: flowNodeId,
           type: 'evidenceNode',
-          position: filePos,
+          position: filePosition,
           data: {
-            evidenceId: nodeId,
+            evidenceId: flowNodeId,
             filename: file.name,
             evidenceType: 'other',
             summary: '',
@@ -380,338 +495,328 @@ function EvidenceCanvasInner() {
             labels: [],
             nodeStatus: 'uploading',
             uploadProgress: 0,
+            isIndexed: false,
             hasConnections: false,
           },
         };
 
-        setNodes((prev) => [...prev, uploadingNode]);
+        setNodes((prev) => [...prev.filter((node) => node.type !== 'insightBadge'), uploadingNode, ...prev.filter((node) => node.type === 'insightBadge')]);
 
-        // Upload
         try {
-          await uploadFiles(id!, [file], (ev: ParsedEvidence) => {
-            setNodes((prev) =>
-              prev.map((n) => {
-                if (n.id !== nodeId) return n;
-                return {
-                  ...n,
-                  id: ev.evidence_id,
-                  data: {
-                    ...(n.data as EvidenceNodeData),
-                    evidenceId: ev.evidence_id,
-                    filename: ev.filename,
-                    evidenceType: ev.evidence_type,
-                    summary: ev.summary,
-                    entities: ev.entities,
-                    entityCount: ev.entity_count,
-                    labels: ev.labels,
-                    nodeStatus: 'complete' as const,
-                    uploadProgress: 100,
-                  },
-                };
-              })
+          const response = await uploadFiles(resolvedCaseId, [file], (parsed: ParsedEvidence) => {
+            setNodes(
+              updateEvidenceNodeByFlowId(flowNodeId, (node) => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  evidenceId: parsed.evidence_id,
+                  filename: parsed.filename,
+                  evidenceType: parsed.evidence_type,
+                  summary: parsed.summary,
+                  entities: parsed.entities,
+                  entityCount: parsed.entity_count,
+                  labels: parsed.labels,
+                  nodeStatus: 'complete' as const,
+                  uploadProgress: 100,
+                  isIndexed: true,
+                },
+              })),
             );
-
-            // Trigger recluster
-            setTimeout(() => {
-              setNodes((prev) => {
-                const evidenceNodes = prev.filter((n) => n.type === 'evidenceNode');
-                cluster(evidenceNodes as any);
-                return prev;
-              });
-            }, 100);
+            reclusterEvidenceNodes();
           });
+
+          setAnalysisDone(false);
+          setEdges([]);
+          setNodes((prev) => prev.filter((node) => node.type !== 'insightBadge'));
+
+          if (response.video_pending.length > 0) {
+            const pending = response.video_pending[0];
+            setNodes(
+              updateEvidenceNodeByFlowId(flowNodeId, (node) => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  evidenceId: pending.evidence_id ?? flowNodeId,
+                  filename: pending.filename,
+                  evidenceType: 'video',
+                  summary: 'Video queued for analysis and reconstruction.',
+                  nodeStatus: 'complete' as const,
+                  uploadProgress: 100,
+                  isIndexed: false,
+                },
+              })),
+            );
+            reclusterEvidenceNodes();
+          }
+
+          const failedUpload = response.parsed.find((item) => item.status === 'error');
+          const hasSuccessfulParsedEvidence = response.parsed.some(
+            (item) => item.status === 'parsed' && item.evidence_id,
+          );
+
+          if (!hasSuccessfulParsedEvidence && response.video_pending.length === 0) {
+            setNodes(
+              updateEvidenceNodeByFlowId(flowNodeId, (node) => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  summary: failedUpload?.error || 'Unable to parse this evidence item.',
+                  nodeStatus: 'complete' as const,
+                  uploadProgress: 100,
+                  isIndexed: false,
+                },
+              })),
+            );
+          }
         } catch {
-          // On error, show as complete with mock data
-          setNodes((prev) =>
-            prev.map((n) =>
-              n.id === nodeId
-                ? {
-                    ...n,
-                    data: {
-                      ...(n.data as EvidenceNodeData),
-                      nodeStatus: 'complete' as const,
-                      uploadProgress: 100,
-                    },
-                  }
-                : n
-            )
+          setNodes(
+            updateEvidenceNodeByFlowId(flowNodeId, (node) => ({
+              ...node,
+              data: {
+                ...node.data,
+                summary: 'Upload failed. Please try again.',
+                nodeStatus: 'complete' as const,
+                uploadProgress: 100,
+                isIndexed: false,
+              },
+            })),
           );
         }
       }
     },
-    [caseId, setNodes, cluster]
+    [caseId, reclusterEvidenceNodes, setEdges, setNodes],
   );
 
   const handleAddFilesFromButton = useCallback(
     (files: File[]) => {
-      const viewport = { x: 0, y: 0 };
-      handleFiles(files, viewport);
+      void handleFiles(files, { x: 0, y: 0 });
     },
-    [handleFiles]
+    [handleFiles],
   );
 
-  // ── Drop zone ────────────────────────────────────────────────────────────
   const { isDragOver, dropLabelPos, handlers: dropHandlers } = useFileDrop({
-    onFiles: handleFiles,
+    onFiles: (files, position) => {
+      void handleFiles(files, position);
+    },
   });
 
-  // ── Analyze ──────────────────────────────────────────────────────────────
   const handleAnalyze = useCallback(async () => {
-    const evidenceNodes = nodes.filter((n) => n.type === 'evidenceNode');
-    if (evidenceNodes.length === 0 || isAnalyzing) return;
+    const evidenceNodes = nodesRef.current.filter(isEvidenceCanvasNode);
+    if (evidenceNodes.length === 0 || isAnalyzing || !caseId) {
+      return;
+    }
 
     setIsAnalyzing(true);
-
-    // Step 1: Pulse all nodes amber
     setNodes((prev) =>
-      prev.map((n) =>
-        n.type === 'evidenceNode'
-          ? { ...n, data: { ...n.data, analyzing: true } }
-          : n
-      )
+      prev.map((node) =>
+        node.type === 'evidenceNode'
+          ? { ...node, data: { ...node.data, analyzing: true } }
+          : node,
+      ),
     );
-
-    // Step 2: Radial wave
     setShowAnalyzeWave(true);
-    setTimeout(() => setShowAnalyzeWave(false), 1600);
+    window.setTimeout(() => setShowAnalyzeWave(false), 1600);
 
-    // Step 3: Call API
-    let result: AnalysisResponse | null = null;
     try {
-      result = await analyzeCase(caseId!);
-    } catch {
-      result = MOCK_ANALYSIS;
-    }
-    setAnalysisResult(result);
+      const result: AnalysisResponse = await analyzeCase(caseId);
 
-    // Step 4: Recluster nodes (animated)
-    await new Promise<void>((resolve) => {
-      setNodes((prev) => {
-        const ev = prev.filter((n) => n.type === 'evidenceNode');
-        cluster(ev as any);
-        return prev.map((n) =>
-          n.type === 'evidenceNode'
-            ? { ...n, data: { ...n.data, analyzing: false } }
-            : n
-        );
+      await new Promise<void>((resolve) => {
+        setNodes((prev) => {
+          const evidenceOnly = prev.filter(isEvidenceCanvasNode);
+          cluster(evidenceOnly);
+          return prev
+            .filter((node) => node.type !== 'insightBadge')
+            .map((node) =>
+              node.type === 'evidenceNode'
+                ? { ...node, data: { ...node.data, analyzing: false } }
+                : node,
+            );
+        });
+        window.setTimeout(resolve, 900);
       });
-      setTimeout(resolve, 900);
-    });
 
-    // Step 5: Clear existing edges, build new ones
-    setEdges([]);
-    const currentEvidenceNodes = nodes.filter((n) => n.type === 'evidenceNode');
-    const newEdges = buildEdgesFromAnalysis(result, currentEvidenceNodes);
+      setEdges([]);
+      const freshEvidenceNodes = nodesRef.current.filter(isEvidenceCanvasNode);
+      const newEdges = buildEdgesFromAnalysis(result, freshEvidenceNodes);
+      await staggerEdgeReveal(newEdges, setEdges);
 
-    // Step 6: Stagger edge reveal
-    await staggerEdgeReveal(newEdges, setEdges);
-
-    // Step 7: Add insight badges
-    if (result.contradictions.items.length > 0) {
-      const badgeId = 'insight-contradiction-count';
-      const midNode = nodes[Math.floor(nodes.length / 2)];
-      const badgePos = midNode?.position ?? { x: 200, y: 200 };
-
-      setNodes((prev) => [
-        ...prev,
-        {
-          id: badgeId,
-          type: 'insightBadge',
-          position: { x: badgePos.x + 80, y: badgePos.y - 80 },
-          data: {
-            insightType: 'contradiction',
-            text: `${result!.contradictions.summary.total} contradiction${result!.contradictions.summary.total > 1 ? 's' : ''} found`,
+      if (result.contradictions.items.length > 0) {
+        const badgePositionSource =
+          nodesRef.current[Math.floor(nodesRef.current.length / 2)]?.position ?? { x: 200, y: 200 };
+        setNodes((prev) => [
+          ...prev.filter((node) => node.type !== 'insightBadge'),
+          {
+            id: 'insight-contradiction-count',
+            type: 'insightBadge',
+            position: { x: badgePositionSource.x + 80, y: badgePositionSource.y - 80 },
+            data: {
+              insightType: 'contradiction',
+              text: `${result.contradictions.summary.total} contradiction${result.contradictions.summary.total > 1 ? 's' : ''} found`,
+            },
+            draggable: false,
+            selectable: false,
           },
-          draggable: false,
-          selectable: false,
-        },
-      ]);
+        ]);
+      }
+
+      setAnalysisDone(true);
+    } finally {
+      setIsAnalyzing(false);
+      setNodes((prev) =>
+        prev.map((node) =>
+          node.type === 'evidenceNode'
+            ? { ...node, data: { ...node.data, analyzing: false } }
+            : node,
+        ),
+      );
+    }
+  }, [caseId, cluster, isAnalyzing, setEdges, setNodes]);
+
+  const handleGenerateReport = useCallback(async () => {
+    if (isGenerating || !caseId) {
+      return;
     }
 
-    setAnalysisDone(true);
-    setIsAnalyzing(false);
-  }, [nodes, isAnalyzing, caseId, setNodes, setEdges, cluster]);
-
-  // ── Generate Report (inline sidebar) ────────────────────────────────────
-  const handleGenerateReport = useCallback(() => {
-    if (isGenerating || reportSidebarOpen || !caseId) return;
     setReportSidebarOpen(true);
     setIsGenerating(true);
     setReportDone(false);
     setReportSections([]);
 
-    generateReport(caseId).catch(() => {/* non-fatal */});
+    try {
+      const response = await generateReport(caseId);
+      await refreshReportJob(response.job_id);
+      streamCleanupRef.current?.();
+      streamCleanupRef.current = streamReport(
+        response.job_id,
+        () => {
+          scheduleReportRefresh(response.job_id);
+        },
+        () => {
+          scheduleReportRefresh(response.job_id);
+        },
+      );
+    } catch {
+      setIsGenerating(false);
+    }
+  }, [caseId, isGenerating, refreshReportJob, scheduleReportRefresh]);
 
-    streamReport(
-      caseId,
-      (event) => {
-        if (event.event === 'section_start') {
-          setReportSections((prev) => [
-            ...prev,
-            { section: event.section, text: '', streaming: true, complete: false },
-          ]);
-        } else if (event.event === 'section_delta') {
-          setReportSections((prev) =>
-            prev.map((s) =>
-              s.section.id === event.section_id
-                ? { ...s, text: s.text + event.delta_text }
-                : s
-            )
-          );
-        } else if (event.event === 'section_complete') {
-          setReportSections((prev) =>
-            prev.map((s) =>
-              s.section.id === event.section_id
-                ? { ...s, streaming: false, complete: true }
-                : s
-            )
-          );
-        } else if (event.event === 'done') {
-          setIsGenerating(false);
-          setReportDone(true);
-        }
-      },
-      () => {
-        setIsGenerating(false);
-        setReportDone(true);
-      }
-    );
-  }, [isGenerating, reportSidebarOpen, caseId]);
-
-  const handleAnalyzeAndGenerate = useCallback(async () => {
-    await handleAnalyze();
-    handleGenerateReport();
-  }, [handleAnalyze, handleGenerateReport]);
-
-  // ── Reset layout ─────────────────────────────────────────────────────
   const handleResetLayout = useCallback(() => {
-    const resetNodes = buildInitialMockNodes();
-    setNodes(resetNodes);
-    const resetEdges = buildInitialMockEdges(resetNodes);
-    setEdges(resetEdges);
-    setTimeout(() => fitView({ duration: 600, padding: 0.12 }), 50);
-  }, [setNodes, setEdges, fitView]);
-
-  const evidenceCount = nodes.filter((n) => n.type === 'evidenceNode').length;
+    if (USE_MOCK) {
+      const resetNodes = buildInitialMockNodes();
+      const resetEdges = buildInitialMockEdges(resetNodes);
+      setNodes(resetNodes);
+      setEdges(resetEdges);
+    }
+    window.setTimeout(() => fitView({ duration: 600, padding: 0.12 }), 50);
+  }, [fitView, setEdges, setNodes]);
 
   return (
-    <CanvasContext.Provider value={{ connectedNodeIds }}>
-      <div
-        ref={wrapperRef}
-        style={{ width: '100%', height: '100%', display: 'flex' }}
-        {...dropHandlers}
-      >
-        {/* Canvas area */}
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          {/* Canvas recluster class */}
-          <div
-            className={[
-              isReclustering ? 'is-reclustering' : '',
-              isSnappingBack ? 'is-snapping-back' : '',
-            ].filter(Boolean).join(' ') || undefined}
-            style={{ width: '100%', height: '100%' }}
+    <div
+      ref={wrapperRef}
+      style={{ width: '100%', height: '100%', display: 'flex' }}
+      {...dropHandlers}
+    >
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        <div
+          className={
+            [isReclustering ? 'is-reclustering' : '', isSnappingBack ? 'is-snapping-back' : '']
+              .filter(Boolean)
+              .join(' ') || undefined
+          }
+          style={{ width: '100%', height: '100%' }}
+        >
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={handleNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            fitView
+            fitViewOptions={{ padding: 0.12 }}
+            panOnDrag
+            zoomOnScroll
+            selectionOnDrag={false}
+            minZoom={0.15}
+            maxZoom={2}
+            style={{ background: 'var(--bg)' }}
+            proOptions={{ hideAttribution: true }}
           >
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={handleNodesChange}
-              onEdgesChange={onEdgesChange}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              fitView
-              fitViewOptions={{ padding: 0.12 }}
-              panOnDrag
-              zoomOnScroll
-              selectionOnDrag={false}
-              minZoom={0.15}
-              maxZoom={2}
-              style={{ background: 'var(--bg)' }}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background
-                variant={BackgroundVariant.Dots}
-                gap={20}
-                size={1.5}
-                color="#E8E6E0"
-              />
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} color="#E8E6E0" />
 
-              {/* Toolbar */}
-              <CanvasToolbar
-                evidenceCount={evidenceCount}
-                isAnalyzing={isAnalyzing}
-                isGenerating={isGenerating}
-                caseId={caseId}
-                onAddFiles={handleAddFilesFromButton}
-                onGenerateReport={handleAnalyzeAndGenerate}
-              />
+            <CanvasToolbar
+              evidenceCount={evidenceCount}
+              indexedEvidenceCount={indexedEvidenceCount}
+              isAnalyzing={isAnalyzing}
+              isGenerating={isGenerating}
+              caseId={caseId}
+              onAddFiles={handleAddFilesFromButton}
+              onGenerateReport={handleGenerateReport}
+            />
 
-              {/* Zoom Controls */}
-              <ZoomControls onReset={handleResetLayout} />
-            </ReactFlow>
-          </div>
-
-          {/* Drag-over overlay */}
-          {isDragOver && (
-            <div className="canvas-dragover-overlay">
-              <div
-                style={{
-                  position: 'absolute',
-                  left: dropLabelPos.x - 80,
-                  top: dropLabelPos.y - 20,
-                  fontFamily: 'DM Sans, sans-serif',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: 'var(--accent)',
-                  background: 'var(--bg-surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '6px',
-                  padding: '6px 10px',
-                  pointerEvents: 'none',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                <span>📎</span>
-                Drop to add evidence
-              </div>
-            </div>
-          )}
-
-          {/* Analyze wave */}
-          {showAnalyzeWave && <div className="canvas-analyze-wave" />}
-
-          {/* Agent Orb — positioned within canvas area so it shifts with sidebar */}
-          <div style={{ position: 'absolute', bottom: '24px', right: '24px', zIndex: 50, width: '80px' }}>
-            <AgentOrb />
-          </div>
+            <ZoomControls onReset={handleResetLayout} />
+          </ReactFlow>
         </div>
 
-        {/* Report progress sidebar */}
-        {reportSidebarOpen && (
-          <ReportProgressSidebar
-            sections={reportSections}
-            isGenerating={isGenerating}
-            done={reportDone}
-            caseId={caseId}
-          />
+        {isDragOver && (
+          <div className="canvas-dragover-overlay">
+            <div
+              style={{
+                position: 'absolute',
+                left: dropLabelPos.x - 80,
+                top: dropLabelPos.y - 20,
+                fontFamily: 'DM Sans, sans-serif',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: 'var(--accent)',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                pointerEvents: 'none',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <span>📎</span>
+              Drop to add evidence
+            </div>
+          </div>
         )}
+
+        {showAnalyzeWave && <div className="canvas-analyze-wave" />}
+
+        <div style={{ position: 'absolute', bottom: '24px', right: '24px', zIndex: 50, width: '80px' }}>
+          <AgentOrb />
+        </div>
       </div>
-    </CanvasContext.Provider>
+
+      {reportSidebarOpen && (
+        <ReportProgressSidebar
+          sections={reportSections}
+          isGenerating={isGenerating}
+          done={reportDone}
+          caseId={caseId}
+        />
+      )}
+    </div>
   );
 }
 
-// ─── Public Export (wrapped in ReactFlowProvider) ─────────────────────────────
-
 interface EvidenceCanvasProps {
   caseId?: string;
+  onWorkspaceChange?: (summary: WorkspaceSummary) => void;
 }
 
-export function EvidenceCanvas({ caseId: _caseId }: EvidenceCanvasProps = {}) {
+export function EvidenceCanvas({
+  caseId: _caseId,
+  onWorkspaceChange,
+}: EvidenceCanvasProps = {}) {
   return (
     <ReactFlowProvider>
-      <EvidenceCanvasInner />
+      <EvidenceCanvasInner onWorkspaceChange={onWorkspaceChange} />
     </ReactFlowProvider>
   );
 }

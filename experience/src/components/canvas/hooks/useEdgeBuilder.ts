@@ -9,7 +9,16 @@ export function buildEdgesFromAnalysis(
   evidenceNodes: Node[]
 ): Edge[] {
   const edges: Edge[] = [];
-  const evidenceIds = new Set(evidenceNodes.map((n) => n.id));
+  const nodeIds = new Set(evidenceNodes.map((n) => n.id));
+  const evidenceIdToNodeId = new Map<string, string>();
+
+  evidenceNodes.forEach((node) => {
+    const nodeData = node.data as { evidenceId?: string };
+    const backendEvidenceId = nodeData.evidenceId;
+    if (backendEvidenceId) {
+      evidenceIdToNodeId.set(backendEvidenceId, node.id);
+    }
+  });
 
   // ── Entity threads: connect evidence nodes that share an entity ──────────
   analysis.entities.forEach((entity) => {
@@ -29,7 +38,7 @@ export function buildEdgesFromAnalysis(
       for (let j = i + 1; j < mentioningEvidenceIds.length; j++) {
         const srcId = mentioningEvidenceIds[i];
         const tgtId = mentioningEvidenceIds[j];
-        if (evidenceIds.has(srcId) && evidenceIds.has(tgtId)) {
+        if (nodeIds.has(srcId) && nodeIds.has(tgtId)) {
           edges.push({
             id: `entity-${entity.id}-${i}-${j}`,
             source: srcId,
@@ -45,15 +54,15 @@ export function buildEdgesFromAnalysis(
 
   // ── Contradiction threads ────────────────────────────────────────────────
   analysis.contradictions.items.forEach((contradiction) => {
-    const srcId = contradiction.fact_a.evidence_id;
-    const tgtId = contradiction.fact_b.evidence_id;
+    const srcId = evidenceIdToNodeId.get(contradiction.fact_a.evidence_id);
+    const tgtId = evidenceIdToNodeId.get(contradiction.fact_b.evidence_id);
 
     if (
       srcId &&
       tgtId &&
       srcId !== tgtId &&
-      evidenceIds.has(srcId) &&
-      evidenceIds.has(tgtId)
+      nodeIds.has(srcId) &&
+      nodeIds.has(tgtId)
     ) {
       edges.push({
         id: `contradiction-${contradiction.id}`,
