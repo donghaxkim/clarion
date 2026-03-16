@@ -447,7 +447,7 @@ export default function ReportPage() {
                   position: 'relative',
                   scrollMarginTop: '88px',
                   margin: '0 -12px',
-                  padding: '10px 12px',
+                  padding: '0px 10px',
                   borderRadius: '10px',
                   background:
                     highlightedSectionId === item.section.id || voiceFocusedSectionId === item.section.id
