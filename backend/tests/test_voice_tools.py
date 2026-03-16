@@ -1,9 +1,11 @@
 from app.services.voice.models import (
     VoiceContradiction,
     VoiceEntity,
+    VoiceEntityFact,
     VoiceEvidence,
     VoiceMention,
     VoiceReportSection,
+    VoiceSectionCitation,
     VoiceSessionContext,
 )
 from app.services.voice.tools import execute_tool, get_tool_declarations
@@ -34,8 +36,29 @@ def _make_context() -> VoiceSessionContext:
                 mentions=[
                     VoiceMention(
                         evidence_id="ev_001",
+                        source="police_report.pdf",
                         page=1,
-                        excerpt="John Smith",
+                        excerpt="John Smith described the impact.",
+                    )
+                ],
+                facts=[
+                    VoiceEntityFact(
+                        fact="John Smith estimated the vehicle at 25 mph.",
+                        dimension="speed",
+                        source="police_report.pdf",
+                        evidence_id="ev_001",
+                        page=1,
+                        excerpt="John Smith estimated the vehicle at 25 mph.",
+                        reliability=0.72,
+                    )
+                ],
+                contradictions=[
+                    VoiceContradiction(
+                        contradiction_id="c_001",
+                        severity="high",
+                        description="Speed disputed - John Smith",
+                        fact_a="John Smith says 25 mph",
+                        fact_b="Police report says 40 mph",
                     )
                 ],
             )
@@ -52,9 +75,18 @@ def _make_context() -> VoiceSessionContext:
         sections=[
             VoiceReportSection(
                 section_id="s_001",
+                canonical_block_id="s_001",
                 kind="text",
+                edit_target="content",
                 title="Collision Summary",
                 text="Original text",
+                citations=[
+                    VoiceSectionCitation(
+                        source_id="ev_001",
+                        source_label="police_report.pdf",
+                        excerpt="Officer observed rear-end damage to plaintiff vehicle.",
+                    )
+                ],
             )
         ],
     )
@@ -63,21 +95,21 @@ def _make_context() -> VoiceSessionContext:
 def test_get_tool_declarations_returns_tool():
     tool = get_tool_declarations()
     assert tool is not None
-    assert len(tool.function_declarations) == 4
+    assert len(tool.function_declarations) == 5
 
 
 def test_execute_navigate_to():
     context = _make_context()
     result, frontend_event = execute_tool(
         "navigate_to",
-        {"target": "contradiction", "id": "c_001"},
+        {"target": "section", "id": "s_001"},
         context,
     )
-    assert "Navigated to contradiction c_001" in result
+    assert "Navigated to section s_001" in result
     assert frontend_event == {
         "type": "navigate",
-        "target": "contradiction",
-        "id": "c_001",
+        "target": "section",
+        "id": "s_001",
     }
 
 
@@ -111,7 +143,7 @@ def test_execute_get_entity_detail():
         context,
     )
     assert "John Smith" in result
-    assert "person" in result
+    assert "Facts: 1" in result
     assert "Contradictions: 1" in result
     assert frontend_event is None
 
@@ -126,14 +158,26 @@ def test_execute_get_entity_detail_case_insensitive():
     assert "John Smith" in result
 
 
-def test_execute_edit_section():
+def test_execute_get_section_detail():
+    context = _make_context()
+    result, frontend_event = execute_tool(
+        "get_section_detail",
+        {"section_id": "s_001"},
+        context,
+    )
+    assert "Collision Summary" in result
+    assert "police_report.pdf" in result
+    assert frontend_event is None
+
+
+def test_execute_edit_section_creates_proposal():
     context = _make_context()
     result, frontend_event = execute_tool(
         "edit_section",
         {"section_id": "s_001", "instruction": "make it shorter"},
         context,
     )
-    assert "Edit request submitted" in result
-    assert frontend_event["type"] == "edit_result"
+    assert "Prepared an edit proposal" in result
+    assert frontend_event["type"] == "edit_proposal"
     assert frontend_event["section_id"] == "s_001"
-    assert frontend_event["status"] == "success"
+    assert frontend_event["instruction"] == "make it shorter"

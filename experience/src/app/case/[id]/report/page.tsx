@@ -8,7 +8,7 @@ import { AlertTriangle, FileText, Users } from 'lucide-react';
 import { EntityChip } from '@/components/analysis/EntityChip';
 import { EntityPanel } from '@/components/entity/EntityPanel';
 import { ReportBlock } from '@/components/report/ReportBlock';
-import { SectionEditor } from '@/components/report/SectionEditor';
+import { ReportVoiceAssistant } from '@/components/report/ReportVoiceAssistant';
 import { getEvidenceColor } from '@/components/ui/Badge';
 import { getCase, getCaseReport, streamReport } from '@/lib/api';
 import { CaseReportState, Entity, FullCase, ParsedEvidence, ReportSection } from '@/lib/types';
@@ -43,9 +43,17 @@ export default function ReportPage() {
   const [sections, setSections] = useState<SectionState[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editingSection, setEditingSection] = useState<ReportSection | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
+  const [voiceFocusedSectionId, setVoiceFocusedSectionId] = useState<string | null>(null);
+  const [highlightedSectionId, setHighlightedSectionId] = useState<string | null>(null);
+  const [highlightedEvidenceId, setHighlightedEvidenceId] = useState<string | null>(null);
+  const [voiceFocusRequest, setVoiceFocusRequest] = useState<{
+    nonce: number;
+    section: ReportSection;
+  } | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const evidenceHighlightTimerRef = useRef<number | null>(null);
 
   const applyReportState = useCallback((nextState: CaseReportState) => {
     setReportState(nextState);
@@ -103,6 +111,12 @@ export default function ReportPage() {
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
       }
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+      if (evidenceHighlightTimerRef.current !== null) {
+        window.clearTimeout(evidenceHighlightTimerRef.current);
+      }
     },
     [],
   );
@@ -143,7 +157,7 @@ export default function ReportPage() {
     };
   }, [caseData?.analysis_status, refreshCaseState]);
 
-  const handleSectionUpdated = useCallback(async (_response?: unknown) => {
+  const handleReportUpdated = useCallback(async () => {
     try {
       await refreshReportState();
       setError(null);
@@ -163,6 +177,73 @@ export default function ReportPage() {
   const analysisFailed = caseData?.analysis_status === 'failed';
   const analysisFailureMessage =
     caseData?.analysis_error || 'Case analysis is unavailable right now.';
+  const voiceEnabled = Boolean(reportState?.report_id && reportState.status === 'completed');
+
+  const highlightSection = useCallback((sectionId: string, persist: boolean) => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    setHighlightedSectionId(sectionId);
+    if (!persist) {
+      highlightTimerRef.current = window.setTimeout(() => {
+        setHighlightedSectionId((current) =>
+          current === sectionId && voiceFocusedSectionId !== sectionId ? null : current,
+        );
+      }, 2200);
+    }
+  }, [voiceFocusedSectionId]);
+
+  const highlightEvidence = useCallback((evidenceId: string) => {
+    if (evidenceHighlightTimerRef.current !== null) {
+      window.clearTimeout(evidenceHighlightTimerRef.current);
+    }
+    setHighlightedEvidenceId(evidenceId);
+    evidenceHighlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedEvidenceId((current) => (current === evidenceId ? null : current));
+    }, 2200);
+  }, []);
+
+  const handleVoiceFocusRequest = useCallback((section: ReportSection) => {
+    setVoiceFocusedSectionId(section.id);
+    highlightSection(section.id, true);
+    setVoiceFocusRequest({
+      nonce: Date.now(),
+      section,
+    });
+  }, [highlightSection]);
+
+  const handleVoiceFocusChange = useCallback((sectionId: string | null) => {
+    setVoiceFocusedSectionId(sectionId);
+    if (sectionId) {
+      highlightSection(sectionId, true);
+    } else {
+      setHighlightedSectionId(null);
+    }
+  }, [highlightSection]);
+
+  const handleVoiceNavigateSection = useCallback((sectionId: string) => {
+    highlightSection(sectionId, false);
+    const element = document.getElementById(`report-section-${sectionId}`);
+    element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlightSection]);
+
+  const handleVoiceNavigateEntity = useCallback((entityIdOrName: string) => {
+    const entity =
+      entities.find((item) => item.id === entityIdOrName)
+      ?? entities.find((item) => item.name.toLowerCase() === entityIdOrName.toLowerCase())
+      ?? caseData?.entities.find((item) => item.id === entityIdOrName)
+      ?? caseData?.entities.find((item) => item.name.toLowerCase() === entityIdOrName.toLowerCase())
+      ?? null;
+    if (entity) {
+      setSelectedEntity(entity);
+    }
+  }, [caseData?.entities, entities]);
+
+  const handleVoiceNavigateEvidence = useCallback((evidenceId: string) => {
+    highlightEvidence(evidenceId);
+    const element = document.getElementById(`report-evidence-${evidenceId}`);
+    element?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [highlightEvidence]);
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
@@ -259,12 +340,16 @@ export default function ReportPage() {
             {evidence.map((item) => (
               <div
                 key={item.evidence_id}
+                id={`report-evidence-${item.evidence_id}`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
                   padding: '6px 0',
                   borderBottom: '1px solid var(--border)',
+                  background:
+                    highlightedEvidenceId === item.evidence_id ? 'var(--bg-elevated)' : 'transparent',
+                  transition: 'background 200ms ease',
                 }}
               >
                 <div
@@ -358,13 +443,27 @@ export default function ReportPage() {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, ease: 'easeOut' }}
-                style={{ position: 'relative' }}
+                style={{
+                  position: 'relative',
+                  scrollMarginTop: '88px',
+                  borderRadius: '10px',
+                  background:
+                    highlightedSectionId === item.section.id || voiceFocusedSectionId === item.section.id
+                      ? 'rgba(139, 105, 20, 0.08)'
+                      : 'transparent',
+                  boxShadow:
+                    highlightedSectionId === item.section.id || voiceFocusedSectionId === item.section.id
+                      ? '0 0 0 1px rgba(139, 105, 20, 0.18)'
+                      : 'none',
+                  transition: 'background 200ms ease, box-shadow 200ms ease',
+                }}
+                id={`report-section-${item.section.id}`}
               >
                 <ReportBlock
                   section={item.section}
                   streamingText={item.text}
                   isStreaming={item.streaming}
-                  onEdit={(section) => setEditingSection(section)}
+                  onEdit={voiceEnabled ? handleVoiceFocusRequest : undefined}
                 />
               </motion.div>
             ))}
@@ -388,15 +487,6 @@ export default function ReportPage() {
         <div style={{ width: '48px', flexShrink: 0 }} />
       </div>
 
-      {editingSection && (
-        <SectionEditor
-          section={editingSection}
-          caseId={caseId}
-          onClose={() => setEditingSection(null)}
-          onUpdated={handleSectionUpdated}
-        />
-      )}
-
       {selectedEntity && (
         <EntityPanel
           entity={selectedEntity}
@@ -406,6 +496,19 @@ export default function ReportPage() {
           onClose={() => setSelectedEntity(null)}
         />
       )}
+
+      <ReportVoiceAssistant
+        caseId={caseId}
+        reportId={reportState?.report_id ?? null}
+        enabled={voiceEnabled}
+        sections={sections.map((item) => item.section)}
+        focusRequest={voiceFocusRequest}
+        onFocusChange={handleVoiceFocusChange}
+        onNavigateSection={handleVoiceNavigateSection}
+        onNavigateEntity={handleVoiceNavigateEntity}
+        onNavigateEvidence={handleVoiceNavigateEvidence}
+        onReportUpdated={handleReportUpdated}
+      />
     </div>
   );
 }

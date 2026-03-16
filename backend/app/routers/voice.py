@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.genai import types
@@ -35,7 +36,11 @@ async def voice_endpoint(websocket: WebSocket, report_id: str):
     """
     await websocket.accept()
 
-    context = voice_context_service.get_context(report_id)
+    session_state: dict[str, Any] = {"focused_section_id": None}
+    context = voice_context_service.get_context(
+        report_id,
+        focused_section_id=session_state["focused_section_id"],
+    )
     if context is None:
         await websocket.send_json({"type": "error", "message": "Report not found"})
         await websocket.close(code=4004)
@@ -49,8 +54,12 @@ async def voice_endpoint(websocket: WebSocket, report_id: str):
         await websocket.send_json({"type": "state", "value": "idle"})
 
         async with asyncio.TaskGroup() as task_group:
-            task_group.create_task(_upstream_loop(websocket, session, report_id, reconnected))
-            task_group.create_task(_downstream_loop(websocket, session, report_id, reconnected))
+            task_group.create_task(
+                _upstream_loop(websocket, session, report_id, reconnected, session_state)
+            )
+            task_group.create_task(
+                _downstream_loop(websocket, session, report_id, reconnected, session_state)
+            )
             task_group.create_task(_reconnect_watchdog(websocket, session, reconnected))
 
     except* WebSocketDisconnect:
@@ -71,6 +80,7 @@ async def _upstream_loop(
     session: GeminiVoiceSession,
     report_id: str,
     reconnected: asyncio.Event,
+    session_state: dict[str, Any],
 ):
     """Read messages from frontend, forward audio to Gemini."""
     while True:
@@ -87,13 +97,23 @@ async def _upstream_loop(
             await websocket.send_json({"type": "state", "value": "thinking"})
             await session.send_end_of_turn()
         elif msg_type == "context_update":
-            context = voice_context_service.get_context(report_id)
+            session_state["focused_section_id"] = msg.get("focused_section_id") or None
+            context = voice_context_service.get_context(
+                report_id,
+                focused_section_id=session_state["focused_section_id"],
+            )
             if context is None:
                 continue
             session.update_system_prompt(build_system_prompt(context))
             await session.reconnect()
             reconnected.set()
             await websocket.send_json({"type": "state", "value": "idle"})
+        elif msg_type == "text_turn":
+            text = str(msg.get("text") or "").strip()
+            if not text:
+                continue
+            await websocket.send_json({"type": "state", "value": "thinking"})
+            await session.send_text_turn(text)
 
 
 async def _downstream_loop(
@@ -101,6 +121,7 @@ async def _downstream_loop(
     session: GeminiVoiceSession,
     report_id: str,
     reconnected: asyncio.Event,
+    session_state: dict[str, Any],
 ):
     """Read responses from Gemini, forward audio/events to frontend."""
     while True:
@@ -121,7 +142,13 @@ async def _downstream_loop(
                             speaking = True
                             await websocket.send_json({"type": "state", "value": "speaking"})
                         audio_b64 = base64.b64encode(part.inline_data.data).decode()
-                        await websocket.send_json({"type": "audio_chunk", "data": audio_b64})
+                        await websocket.send_json(
+                            {
+                                "type": "audio_chunk",
+                                "data": audio_b64,
+                                "mime_type": part.inline_data.mime_type,
+                            }
+                        )
 
             if server_content and server_content.turn_complete and speaking:
                 speaking = False
@@ -129,7 +156,10 @@ async def _downstream_loop(
                 await websocket.send_json({"type": "state", "value": "idle"})
 
             if tool_call:
-                context = voice_context_service.get_context(report_id)
+                context = voice_context_service.get_context(
+                    report_id,
+                    focused_section_id=session_state["focused_section_id"],
+                )
                 if context is None:
                     continue
 

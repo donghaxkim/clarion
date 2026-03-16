@@ -14,6 +14,7 @@ from app.models.schema import (
     EvidenceItem,
     ExtractedContent,
     MediaRef,
+    MissingInfo,
     SourceLocation,
     SourcePin,
 )
@@ -99,6 +100,18 @@ def test_voice_context_service_uses_report_and_case_state(monkeypatch, tmp_path)
             )
         ],
     )
+    monkeypatch.setattr(
+        case_service_module,
+        "find_gaps",
+        lambda case, index: [
+            MissingInfo(
+                id="gap_001",
+                severity="warning",
+                description="Need clearer braking distance evidence.",
+                recommendation="Obtain scene measurements.",
+            )
+        ],
+    )
     case_service.analyze_case(record.case.id)
 
     report_store = ReportJobStore(str(tmp_path / "jobs.json"))
@@ -112,6 +125,7 @@ def test_voice_context_service_uses_report_and_case_state(monkeypatch, tmp_path)
                 title="Collision Summary",
                 content="Vehicle A struck Vehicle B from behind.",
                 sort_key="0001",
+                citations=[],
             )
         ],
     )
@@ -144,7 +158,7 @@ def test_voice_context_service_uses_report_and_case_state(monkeypatch, tmp_path)
     )
 
     service = VoiceContextService(report_store=report_store, case_service=case_service)
-    context = service.get_context(report.report_id)
+    context = service.get_context(report.report_id, focused_section_id="section_001")
 
     assert context is not None
     assert context.report_id == "report_001"
@@ -152,10 +166,15 @@ def test_voice_context_service_uses_report_and_case_state(monkeypatch, tmp_path)
     assert context.title == "Smith v. Johnson"
     assert context.case_type == "personal_injury"
     assert context.status == "completed"
-    assert context.sections[0].section_id == "section_001"
+    assert context.sections[0].section_id == "section_001--heading"
+    assert context.sections[1].section_id == "section_001"
+    assert context.focused_section is not None
+    assert context.focused_section.section_id == "section_001"
     assert context.evidence[0].evidence_id == "ev_legacy"
     assert context.entities[0].name == "John Smith"
+    assert context.entities[0].facts[0].fact == "John Smith says the vehicle was traveling 25 mph."
     assert context.contradictions[0].contradiction_id == "contr_001"
+    assert context.missing_info[0].item_id == "gap_001"
 
 
 def test_voice_context_service_returns_none_for_unknown_report(tmp_path):

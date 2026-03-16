@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agents.reporting.callbacks import (
+    after_context_model_guard,
     after_model_guard,
     before_model_guard,
     build_progress_callbacks,
@@ -56,7 +57,8 @@ def build_root_agent(
         name="GroundingReviewerAgent",
         model=policy.text_model,
         description="Checks chronology order and grounding completeness.",
-        include_contents="none",
+        # Loop iterations need prior turn content to avoid empty ADK requests.
+        include_contents="default",
         instruction=_grounding_reviewer_instruction(),
         output_schema=GroundingReview,
         output_key=GROUNDING_REVIEW_STATE,
@@ -68,7 +70,7 @@ def build_root_agent(
         name="TimelineRefinerAgent",
         model=policy.text_model,
         description="Repairs the timeline plan or exits the loop when approved.",
-        include_contents="none",
+        include_contents="default",
         instruction=_timeline_refiner_instruction(),
         output_schema=TimelinePlan,
         output_key=TIMELINE_PLAN_STATE,
@@ -93,10 +95,9 @@ def build_root_agent(
         description="Creates separately labeled public-context notes when enabled.",
         include_contents="none",
         instruction=_context_enrichment_instruction(policy.enable_public_context),
-        output_schema=ContextPlan,
-        output_key=CONTEXT_PLAN_STATE,
         tools=context_tools,
         before_model_callback=before_model_guard,
+        after_model_callback=after_context_model_guard,
         **build_progress_callbacks(progress_events, include_tool_detail=bool(context_tools)),
     )
 
@@ -135,7 +136,7 @@ def build_root_agent(
         name="CompositionReviewerAgent",
         model=policy.helper_model,
         description="Checks the drafted report for clipped prose, duplication, and citation mismatches.",
-        include_contents="none",
+        include_contents="default",
         instruction=_composition_reviewer_instruction(),
         output_schema=CompositionReview,
         output_key=COMPOSITION_REVIEW_STATE,
@@ -147,7 +148,7 @@ def build_root_agent(
         name="CompositionRefinerAgent",
         model=policy.text_model,
         description="Repairs drafted report prose while preserving ordering, ids, and citations.",
-        include_contents="none",
+        include_contents="default",
         instruction=_composition_refiner_instruction(),
         output_schema=ComposerOutput,
         output_key=COMPOSER_STATE,
@@ -254,10 +255,35 @@ Reviewed timeline plan:
 
 Rules:
 - Only create notes when the timeline event already includes public_context_queries.
- - Use the google_search_agent tool when it helps.
+- Use the google_search_agent tool when it helps.
+- Produce at most one note per public_context_query, and only when you found grounded public-context content that genuinely helps a reader.
 - Keep every note explicitly labeled as public context and separate from evidence.
 - Use citations with provenance=public_context only.
-- Return an empty notes array if no extra context is necessary.
+- Return exactly one raw JSON object matching this shape:
+  {{
+    "notes": [
+      {{
+        "title": "Signal timing context",
+        "content": "Public-context note that summarizes the grounded traffic-control context.",
+        "sort_key": "0010.005",
+        "confidence_score": 0.62,
+        "citations": [
+          {{
+            "source_id": "https://example.com/manual",
+            "source_label": "Example Manual",
+            "excerpt": "Quoted public-context excerpt supporting the note.",
+            "provenance": "public_context",
+            "uri": "https://example.com/manual"
+          }}
+        ]
+      }}
+    ]
+  }}
+- Return exactly one raw JSON object matching ContextPlan.
+- Do not wrap the JSON in markdown fences or extra prose.
+- Do not invent fields such as note_id, topic, summary, confidence, sources, search_results, or results in the final output.
+- If you do not have grounded content for a query, omit that note entirely instead of returning placeholders.
+- Return {{"notes": []}} if no extra context is necessary.
 """.strip()
 
 

@@ -6,6 +6,16 @@ const clarionApiBaseUrl = (
   'http://127.0.0.1:8000'
 ).replace(/\/$/, '');
 
+export function getClarionApiBaseUrl(): string {
+  return clarionApiBaseUrl;
+}
+
+export function getClarionWebSocketBaseUrl(): string {
+  const url = new URL(clarionApiBaseUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString().replace(/\/$/, '');
+}
+
 export class ClarionApiError extends Error {
   status: number;
 

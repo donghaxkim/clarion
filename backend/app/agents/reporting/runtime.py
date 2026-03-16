@@ -13,6 +13,7 @@ from app.agents.reporting.agent_builder import (
     TIMELINE_PLAN_STATE,
     build_root_agent,
 )
+from app.agents.reporting.callbacks import REPORTING_WARNINGS_STATE
 from app.agents.reporting.fallback import HeuristicReportingPipeline
 from app.agents.reporting.progress import (
     PipelinePreviewSnapshot,
@@ -31,7 +32,6 @@ from app.agents.reporting.validators import normalize_composer_output, normalize
 from app.config import (
     GCS_BUCKET,
     GOOGLE_API_KEY,
-    REPORT_CONTEXT_CACHE_ENABLED,
     REPORT_ENABLE_PUBLIC_CONTEXT,
     REPORT_HELPER_MODEL,
     REPORT_IMAGE_MODEL,
@@ -70,8 +70,6 @@ class AdkReportingPipeline:
         progress_callback: ProgressCallback | None = None,
     ) -> PipelineResult:
         from google.adk.artifacts import GcsArtifactService, InMemoryArtifactService
-        from google.adk.apps import App
-        from google.adk.agents.context_cache_config import ContextCacheConfig
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
@@ -85,22 +83,13 @@ class AdkReportingPipeline:
             else GcsArtifactService(bucket_name=GCS_BUCKET)
         )
 
-        app = None
-        if self.policy.context_cache_enabled:
-            app = App(
-                name=self.APP_NAME,
-                root_agent=root_agent,
-                context_cache_config=ContextCacheConfig(
-                    min_tokens=2048,
-                    ttl_seconds=600,
-                    cache_intervals=5,
-                ),
-            )
-
+        # Reporting intentionally avoids ADK/Gemini context caching for reliability.
+        # The policy flag is retained for compatibility and observability, but
+        # the runtime forces caching off until the late-stage TaskGroup failures
+        # in the reporting workflow are resolved.
         runner = Runner(
-            app=app,
-            app_name=None if app is not None else self.APP_NAME,
-            agent=None if app is not None else root_agent,
+            app_name=self.APP_NAME,
+            agent=root_agent,
             session_service=session_service,
             artifact_service=artifact_service,
         )
@@ -157,6 +146,7 @@ class AdkReportingPipeline:
             GENERATION_POLICY_STATE: self.policy.model_dump(mode="json"),
             CONTEXT_PLAN_STATE: ContextPlan().model_dump(mode="json"),
             MEDIA_PLAN_STATE: MediaPlan().model_dump(mode="json"),
+            REPORTING_WARNINGS_STATE: [],
         }
 
     def _result_from_state(self, state: dict[str, Any]) -> PipelineResult:
@@ -171,7 +161,7 @@ class AdkReportingPipeline:
             reconstruction_requests=media_plan.reconstruction_requests[
                 : self.policy.max_reconstructions
             ],
-            warnings=[],
+            warnings=_warnings_from_state(state),
         )
 
 
@@ -197,7 +187,7 @@ def build_reporting_pipeline(
             if max_reconstructions is None
             else max_reconstructions
         ),
-        context_cache_enabled=REPORT_CONTEXT_CACHE_ENABLED,
+        context_cache_enabled=False,
     )
     if AdkReportingPipeline.is_available():
         return AdkReportingPipeline(policy=policy)
@@ -295,3 +285,22 @@ def _model_from_value(value: Any, model_type: type[Any]) -> Any:
         except Exception:
             return model_type.model_validate(json.loads(value))
     return model_type.model_validate(value or {})
+
+
+def _warnings_from_state(state: dict[str, Any]) -> list[str]:
+    value = state.get(REPORTING_WARNINGS_STATE, [])
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            parsed = [value]
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if str(item).strip()]
+        if parsed:
+            return [str(parsed)]
+        return []
+    if value:
+        return [str(value)]
+    return []

@@ -69,6 +69,9 @@ REPORT_TEXT_MODEL = os.getenv("REPORT_TEXT_MODEL", "gemini-3.1-flash-lite-previe
 REPORT_HELPER_MODEL = os.getenv("REPORT_HELPER_MODEL", "gemini-3.1-flash-lite-preview")
 REPORT_IMAGE_MODEL = os.getenv("REPORT_IMAGE_MODEL", "imagen-4.0-generate-001")
 REPORT_SEARCH_MODEL = os.getenv("REPORT_SEARCH_MODEL", "gemini-2.5-flash")
+VOICE_LIVE_MODEL = os.getenv(
+    "VOICE_LIVE_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"
+).strip()
 REPORT_MAX_IMAGES = _env_int("REPORT_MAX_IMAGES", 3)
 REPORT_MAX_RECONSTRUCTIONS = _env_int("REPORT_MAX_RECONSTRUCTIONS", 1)
 REPORT_ENABLE_PUBLIC_CONTEXT = _env_flag("REPORT_ENABLE_PUBLIC_CONTEXT", default=True)

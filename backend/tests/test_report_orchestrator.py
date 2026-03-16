@@ -274,6 +274,65 @@ class _FailingAdkPipeline(AdkReportingPipeline):
         )
 
 
+class _GroupedFailingAdkPipeline(AdkReportingPipeline):
+    def __init__(self):
+        super().__init__(
+            policy=ReportGenerationPolicy(
+                text_model="gemini-3-pro-preview",
+                helper_model="gemini-3-flash-preview",
+                image_model="gemini-3-pro-image-preview",
+                search_model="gemini-2.5-flash",
+                enable_public_context=True,
+                max_images=1,
+                max_reconstructions=1,
+            )
+        )
+
+    async def run(self, *, bundle, report_id, user_id, progress_callback=None):
+        del bundle, report_id, user_id, progress_callback
+        raise ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [RuntimeError("google_search_agent: DNS lookup failed")],
+        )
+
+
+class _RecoveringContextWarningAdkPipeline(AdkReportingPipeline):
+    def __init__(self):
+        super().__init__(
+            policy=ReportGenerationPolicy(
+                text_model="gemini-3-pro-preview",
+                helper_model="gemini-3-flash-preview",
+                image_model="gemini-3-pro-image-preview",
+                search_model="gemini-2.5-flash",
+                enable_public_context=True,
+                max_images=1,
+                max_reconstructions=1,
+            )
+        )
+
+    async def run(self, *, bundle, report_id, user_id, progress_callback=None):
+        del bundle, report_id, user_id, progress_callback
+        citation = Citation(source_id="ev-1", provenance=ReportProvenance.evidence)
+        return PipelineResult(
+            blocks=[
+                ComposedBlockDraft(
+                    id="event-impact",
+                    type=ReportBlockType.text,
+                    title="Impact",
+                    content="The collision occurs.",
+                    sort_key="0001",
+                    provenance=ReportProvenance.evidence,
+                    confidence_score=0.8,
+                    citations=[citation],
+                )
+            ],
+            warnings=[
+                "Public-context enrichment omitted: invalid ContextPlan payload. "
+                "Output preview: not valid json at all"
+            ],
+        )
+
+
 class _FakeImageGenerator:
     async def generate(self, *, case_id, report_id, block_id, prompt):
         del case_id, report_id, block_id, prompt
@@ -378,6 +437,39 @@ def test_orchestrator_runs_full_job_and_persists_report_manifest(tmp_path):
     assert manifest_key in uploads
     manifest = json.loads(uploads[manifest_key]["data"].decode("utf-8"))
     assert manifest["report_id"] == "report-1"
+
+
+def test_orchestrator_completes_with_public_context_enabled_without_fallback(tmp_path):
+    store = ReportJobStore(str(tmp_path / "jobs.json"))
+    uploads, upload_fn = _upload_recorder()
+    report = ReportDocument(report_id="report-public-context", status=ReportStatus.running)
+    job = store.create_job(report=report)
+    pipeline_kwargs = {}
+
+    def _pipeline_factory(**kwargs):
+        pipeline_kwargs.update(kwargs)
+        return _FakePipeline()
+
+    orchestrator = ReportGenerationOrchestrator(
+        job_store=store,
+        pipeline_factory=_pipeline_factory,
+        image_generator=_FakeImageGenerator(),
+        reconstruction_service=_FakeReconstructionService(),
+        upload_bytes_fn=upload_fn,
+    )
+
+    request = _request().model_copy(update={"enable_public_context": True})
+    asyncio.run(orchestrator.run_job(job.job_id, request))
+
+    final = store.get_job(job.job_id)
+    assert final is not None
+    assert final.status == ReportGenerationJobStatus.completed
+    assert pipeline_kwargs.get("enable_public_context") is True
+    assert final.report is not None
+    assert not any(
+        warning.startswith("ADK reporting pipeline failed; used deterministic fallback pipeline.")
+        for warning in final.report.warnings
+    )
 
 
 def test_end_to_end_event_order_streams_blocks_before_media(tmp_path):
@@ -520,3 +612,55 @@ def test_orchestrator_falls_back_when_adk_pipeline_fails(tmp_path):
         for warning in final.report.warnings
     )
     assert store.progress_history == sorted(store.progress_history)
+
+
+def test_orchestrator_fallback_warning_includes_nested_exception_details(tmp_path):
+    store = _RecordingReportJobStore(str(tmp_path / "jobs.json"))
+    report = ReportDocument(report_id="report-7", status=ReportStatus.running)
+    job = store.create_job(report=report)
+
+    orchestrator = ReportGenerationOrchestrator(
+        job_store=store,
+        pipeline_factory=lambda **_: _GroupedFailingAdkPipeline(),
+        image_generator=_FakeImageGenerator(),
+        reconstruction_service=_FakeReconstructionService(),
+        upload_bytes_fn=lambda data, gcs_key, content_type="application/octet-stream": f"gs://test/{gcs_key}",
+    )
+
+    asyncio.run(orchestrator.run_job(job.job_id, _request()))
+
+    final = store.get_job(job.job_id)
+    assert final is not None
+    assert final.report is not None
+    warning = final.report.warnings[0]
+    assert "ADK reporting pipeline failed; used deterministic fallback pipeline." in warning
+    assert "unhandled errors in a TaskGroup" in warning
+    assert "google_search_agent: DNS lookup failed" in warning
+
+
+def test_orchestrator_preserves_non_fatal_context_warning_without_fallback(tmp_path):
+    store = _RecordingReportJobStore(str(tmp_path / "jobs.json"))
+    report = ReportDocument(report_id="report-8", status=ReportStatus.running)
+    job = store.create_job(report=report)
+
+    orchestrator = ReportGenerationOrchestrator(
+        job_store=store,
+        pipeline_factory=lambda **_: _RecoveringContextWarningAdkPipeline(),
+        image_generator=_FakeImageGenerator(),
+        reconstruction_service=_FakeReconstructionService(),
+        upload_bytes_fn=lambda data, gcs_key, content_type="application/octet-stream": f"gs://test/{gcs_key}",
+    )
+
+    asyncio.run(orchestrator.run_job(job.job_id, _request()))
+
+    final = store.get_job(job.job_id)
+    assert final is not None
+    assert final.report is not None
+    assert any(
+        warning.startswith("Public-context enrichment omitted: invalid ContextPlan payload.")
+        for warning in final.report.warnings
+    )
+    assert not any(
+        warning.startswith("ADK reporting pipeline failed; used deterministic fallback pipeline.")
+        for warning in final.report.warnings
+    )

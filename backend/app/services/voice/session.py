@@ -3,20 +3,18 @@ Manages a single Gemini Live API WebSocket session.
 Handles connection, audio streaming, tool call responses, and reconnection.
 """
 
-import asyncio
-import base64
 import time
 import logging
 
-from google import genai
 from google.genai import types
 
+from app.config import VOICE_LIVE_MODEL
 from app.services.voice.tools import get_tool_declarations
 from app.utils.gemini_client import get_client
 
 logger = logging.getLogger(__name__)
 
-LIVE_MODEL = "gemini-2.0-flash-live-001"
+LIVE_MODEL = VOICE_LIVE_MODEL
 SESSION_MAX_SECONDS = 540  # reconnect at 9 min (hard limit ~10 min)
 
 
@@ -69,7 +67,19 @@ class GeminiVoiceSession:
         """Signal that the user has finished speaking."""
         if not self._session:
             return
-        await self._session.send_client_content(turns=None, turn_complete=True)
+        await self._session.send_realtime_input(audio_stream_end=True)
+
+    async def send_text_turn(self, text: str):
+        """Send a short text turn to Gemini for confirmations or system notes."""
+        if not self._session or not text.strip():
+            return
+        await self._session.send_client_content(
+            turns=types.Content(
+                role="user",
+                parts=[types.Part(text=text.strip())],
+            ),
+            turn_complete=True,
+        )
 
     async def send_tool_response(self, function_responses: list[types.FunctionResponse]):
         """Send tool execution results back to Gemini."""

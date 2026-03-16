@@ -37,6 +37,7 @@ import type {
   ReportSection,
   UploadResponse,
 } from './types';
+import type { VoiceSessionConfig } from './voice';
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 const API_BASE = '/api';
@@ -402,4 +403,14 @@ export async function editSection(input: {
     status: payload.status,
     report_sections: adaptReportSections(payload.report),
   };
+}
+
+export async function getVoiceSessionConfig(): Promise<VoiceSessionConfig> {
+  if (USE_MOCK) {
+    return {
+      websocket_base_url: 'ws://127.0.0.1:8000',
+    };
+  }
+
+  return fetchJson<VoiceSessionConfig>('/voice/config');
 }

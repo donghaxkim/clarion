@@ -507,10 +507,12 @@ def _build_reporting_fallback_pipeline(
     if not isinstance(pipeline, AdkReportingPipeline):
         return None
 
+    message = _format_exception_message(exc)
+
     return HeuristicReportingPipeline(
         policy=pipeline.policy,
         warning_message=(
             "ADK reporting pipeline failed; used deterministic fallback pipeline. "
-            f"Original error: {exc}"
+            f"Original error: {message}"
         ),
     )

@@ -87,7 +87,7 @@ def _bundle(with_candidates: bool = True) -> CaseEvidenceBundle:
     )
 
 
-def test_fallback_pipeline_uses_event_candidates_and_separates_public_context():
+def test_fallback_pipeline_uses_event_candidates_without_placeholder_public_context():
     pipeline = HeuristicReportingPipeline(
         policy=ReportGenerationPolicy(
             text_model="gemini-3-pro-preview",
@@ -105,7 +105,7 @@ def test_fallback_pipeline_uses_event_candidates_and_separates_public_context():
     assert all(block.type == ReportBlockType.text for block in result.blocks)
     assert all(block.id != "timeline-overview" for block in result.blocks)
     assert result.blocks[0].id == "event-event-1"
-    assert any(block.provenance == ReportProvenance.public_context for block in result.blocks)
+    assert all(block.provenance != ReportProvenance.public_context for block in result.blocks)
     assert len(result.image_requests) == 1
     assert len(result.reconstruction_requests) == 1
     assert result.image_requests[0].block_type == ReportBlockType.image
@@ -113,12 +113,6 @@ def test_fallback_pipeline_uses_event_candidates_and_separates_public_context():
     assert all(
         citation.source_label and citation.excerpt
         for block in result.blocks
-        for citation in block.citations
-    )
-    assert all(
-        citation.provenance == ReportProvenance.public_context
-        for block in result.blocks
-        if block.provenance == ReportProvenance.public_context
         for citation in block.citations
     )
     assert result.blocks[0].citations[0].segment_id == "ev-1:fact:1"
@@ -311,6 +305,12 @@ def test_adk_context_agent_wraps_google_search_for_public_context():
 
     assert search_tool.__class__.__name__ == "GoogleSearchAgentTool"
     assert getattr(search_tool.agent, "model", None) == "gemini-2.5-flash"
+    # The old ADK failure was:
+    # "Failed to parse the parameter notes: list[...ContextNote] of function
+    # set_model_response". Keep the context agent off that automatic schema path.
+    assert getattr(context_agent, "output_schema", None) is None
+    assert getattr(context_agent, "output_key", None) is None
+    assert getattr(context_agent, "after_model_callback", None) is not None
 
 
 def test_adk_refiner_agent_avoids_tool_plus_output_schema_combo():
@@ -329,3 +329,27 @@ def test_adk_refiner_agent_avoids_tool_plus_output_schema_combo():
     refiner_agent = root_agent.sub_agents[1].sub_agents[1]
 
     assert getattr(refiner_agent, "tools", []) == []
+
+
+def test_adk_loop_agents_keep_contents_for_repeat_iterations():
+    pytest.importorskip("google.adk")
+
+    root_agent = build_root_agent(
+        ReportGenerationPolicy(
+            text_model="gemini-3-pro-preview",
+            helper_model="gemini-3-flash-preview",
+            image_model="gemini-3-pro-image-preview",
+            search_model="gemini-2.5-flash",
+            enable_public_context=True,
+        )
+    )
+
+    grounding_reviewer = root_agent.sub_agents[1].sub_agents[0]
+    grounding_refiner = root_agent.sub_agents[1].sub_agents[1]
+    composition_reviewer = root_agent.sub_agents[4].sub_agents[0]
+    composition_refiner = root_agent.sub_agents[4].sub_agents[1]
+
+    assert grounding_reviewer.include_contents == "default"
+    assert grounding_refiner.include_contents == "default"
+    assert composition_reviewer.include_contents == "default"
+    assert composition_refiner.include_contents == "default"

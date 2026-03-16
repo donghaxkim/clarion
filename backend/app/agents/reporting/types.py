@@ -15,6 +15,8 @@ class ReportGenerationPolicy(BaseModel):
     enable_public_context: bool = True
     max_images: int = 3
     max_reconstructions: int = 2
+    # Retained for compatibility and diagnostics; reporting currently forces
+    # ADK context caching off in the runtime for reliability.
     context_cache_enabled: bool = True
 
 

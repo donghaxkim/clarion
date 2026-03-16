@@ -15,7 +15,6 @@ from app.agents.reporting.progress import (
 from app.agents.reporting.types import (
     ComposerOutput,
     ComposedBlockDraft,
-    ContextNote,
     ContextPlan,
     MediaPlan,
     MediaRequest,
@@ -34,7 +33,6 @@ from app.models import (
 )
 from app.services.generation.report_citations import (
     build_evidence_citation,
-    build_public_context_citation,
 )
 
 ProgressCallback = Callable[[PipelineProgressEvent], Awaitable[None] | None]
@@ -230,34 +228,10 @@ class HeuristicReportingPipeline:
         )
 
     def _build_context_notes(self, timeline: TimelinePlan) -> list[ContextNote]:
-        if not self.policy.enable_public_context:
-            return []
-
-        notes: list[ContextNote] = []
-        for event in timeline.timeline_events:
-            if not event.public_context_queries:
-                continue
-            query_summary = ", ".join(event.public_context_queries)
-            note_content = (
-                "Live public-context grounding is enabled for this event. "
-                f"Suggested enrichment queries: {query_summary}."
-            )
-            notes.append(
-                ContextNote(
-                    title=f"Context for {event.title}",
-                    content=note_content,
-                    sort_key=f"{event.sort_key}-ctx",
-                    citations=[
-                        build_public_context_citation(
-                            query,
-                            fallback_excerpt=note_content,
-                        )
-                        for query in event.public_context_queries
-                    ],
-                    confidence_score=0.35,
-                )
-            )
-        return notes
+        del timeline
+        # The deterministic fallback does not retrieve or verify live public
+        # context, so query hints should not appear as final report sections.
+        return []
 
     def _build_blocks(
         self,

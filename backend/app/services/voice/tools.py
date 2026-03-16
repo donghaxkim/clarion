@@ -1,6 +1,7 @@
 """
 Tool declarations and execution for the Gemini Live API voice session.
-Tools let the voice agent navigate the UI, edit reports, and query report data.
+Tools let the voice agent navigate the UI, propose report edits, and query
+report data.
 """
 
 from google.genai import types
@@ -14,17 +15,17 @@ def get_tool_declarations() -> types.Tool:
         function_declarations=[
             types.FunctionDeclaration(
                 name="navigate_to",
-                description="Navigate the user's screen to a specific item",
+                description="Navigate the user's report page to a section, entity, or evidence item",
                 parameters=types.Schema(
                     type="OBJECT",
                     properties={
                         "target": types.Schema(
                             type="STRING",
-                            enum=["contradiction", "entity", "section", "evidence"],
+                            enum=["entity", "section", "evidence"],
                         ),
                         "id": types.Schema(
                             type="STRING",
-                            description="The ID of the item to navigate to",
+                            description="The section_id, entity_id/name, or evidence_id to navigate to",
                         ),
                     },
                     required=["target", "id"],
@@ -32,7 +33,7 @@ def get_tool_declarations() -> types.Tool:
             ),
             types.FunctionDeclaration(
                 name="edit_section",
-                description="Edit a report section with a natural language instruction",
+                description="Propose an edit to a specific report section. This only creates a confirmation request and does not persist changes.",
                 parameters=types.Schema(
                     type="OBJECT",
                     properties={
@@ -58,13 +59,24 @@ def get_tool_declarations() -> types.Tool:
             ),
             types.FunctionDeclaration(
                 name="get_entity_detail",
-                description="Get all facts and contradictions for a specific entity",
+                description="Get grounded mentions, facts, and contradictions for a specific entity",
                 parameters=types.Schema(
                     type="OBJECT",
                     properties={
                         "entity_name": types.Schema(type="STRING"),
                     },
                     required=["entity_name"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_section_detail",
+                description="Get the full text and citations for a report section",
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={
+                        "section_id": types.Schema(type="STRING"),
+                    },
+                    required=["section_id"],
                 ),
             ),
         ]
@@ -86,6 +98,8 @@ def execute_tool(
         return _query_evidence(args, context)
     if name == "get_entity_detail":
         return _get_entity_detail(args, context)
+    if name == "get_section_detail":
+        return _get_section_detail(args, context)
     if name == "edit_section":
         return _edit_section(args, context)
     return f"Unknown tool: {name}", None
@@ -122,7 +136,12 @@ def _query_evidence(args: dict, context: VoiceSessionContext) -> tuple[str, None
 def _get_entity_detail(args: dict, context: VoiceSessionContext) -> tuple[str, None]:
     name = args["entity_name"]
     entity = next(
-        (item for item in context.entities if item.name.lower() == name.lower()),
+        (
+            item
+            for item in context.entities
+            if item.name.lower() == name.lower()
+            or (item.entity_id and item.entity_id == name)
+        ),
         None,
     )
     if entity is None:
@@ -131,19 +150,27 @@ def _get_entity_detail(args: dict, context: VoiceSessionContext) -> tuple[str, N
     parts = [
         f"Entity: {entity.name} ({entity.entity_type})",
         f"Aliases: {', '.join(entity.aliases) if entity.aliases else 'None'}",
-        f"Mentions: {len(entity.mentions)} across evidence",
+        f"Mentions: {len(entity.mentions)}",
     ]
 
-    related = [
-        contradiction
-        for contradiction in context.contradictions
-        if name.lower() in contradiction.description.lower()
-        or name.lower() in (contradiction.fact_a or "").lower()
-        or name.lower() in (contradiction.fact_b or "").lower()
-    ]
-    if related:
-        parts.append(f"Contradictions: {len(related)}")
-        for contradiction in related:
+    if entity.mentions:
+        parts.append("Mention detail:")
+        for mention in entity.mentions[:5]:
+            parts.append(
+                f"  - {mention.source or mention.evidence_id}: {mention.excerpt or 'Mentioned in this source.'}"
+            )
+
+    if entity.facts:
+        parts.append(f"Facts: {len(entity.facts)}")
+        for fact in entity.facts[:6]:
+            parts.append(
+                f"  - [{fact.dimension or 'General'}] {fact.fact} "
+                f"(Source: {fact.source}; Excerpt: {fact.excerpt})"
+            )
+
+    if entity.contradictions:
+        parts.append(f"Contradictions: {len(entity.contradictions)}")
+        for contradiction in entity.contradictions[:4]:
             parts.append(
                 f"  - [{contradiction.severity}] {contradiction.description}"
             )
@@ -151,9 +178,30 @@ def _get_entity_detail(args: dict, context: VoiceSessionContext) -> tuple[str, N
     return "\n".join(parts), None
 
 
+def _get_section_detail(args: dict, context: VoiceSessionContext) -> tuple[str, None]:
+    section_id = args["section_id"]
+    section = next(
+        (item for item in context.sections if item.section_id == section_id),
+        None,
+    )
+    if section is None:
+        return f"Section '{section_id}' not found.", None
+
+    parts = [
+        f"Section: {section.title or section.section_id}",
+        f"Kind: {section.kind}",
+        f"Text: {section.text or 'No text available.'}",
+    ]
+    if section.citations:
+        parts.append("Citations:")
+        for citation in section.citations[:6]:
+            parts.append(f"  - {citation.source_label}: {citation.excerpt}")
+    return "\n".join(parts), None
+
+
 def _edit_section(args: dict, context: VoiceSessionContext) -> tuple[str, dict]:
     section_id = args["section_id"]
-    instruction = args["instruction"]
+    instruction = args["instruction"].strip()
 
     section = next(
         (item for item in context.sections if item.section_id == section_id),
@@ -161,10 +209,30 @@ def _edit_section(args: dict, context: VoiceSessionContext) -> tuple[str, dict]:
     )
     if section is None:
         return f"Section {section_id} not found.", {
-            "type": "edit_result",
+            "type": "edit_cancelled",
             "section_id": section_id,
             "status": "error",
         }
 
-    event = {"type": "edit_result", "section_id": section_id, "status": "success"}
-    return f"Edit request submitted for section {section_id}: '{instruction}'", event
+    summary = _summarize_instruction(instruction)
+    event = {
+        "type": "edit_proposal",
+        "section_id": section.section_id,
+        "canonical_block_id": section.canonical_block_id or section.section_id,
+        "edit_target": section.edit_target,
+        "title": section.title or section.section_id,
+        "instruction": instruction,
+        "summary": summary,
+    }
+    return (
+        f"Prepared an edit proposal for section {section.section_id}. "
+        "Wait for the user to confirm before saying the change is applied.",
+        event,
+    )
+
+
+def _summarize_instruction(instruction: str) -> str:
+    compact = " ".join(instruction.split())
+    if len(compact) <= 120:
+        return compact
+    return compact[:117].rstrip() + "..."
